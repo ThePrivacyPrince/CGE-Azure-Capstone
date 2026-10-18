@@ -5,7 +5,7 @@ Every report folder ends with manifest.json listing the exact Cosmos queries (te
 parameters, partition key) that produced it and how many rows each returned. This
 script re-runs them as YOU (az login; the deployer holds Cosmos data access from
 stage 03) and checks the store still answers the same way, and that the run's
-document-set digest still matches what the collector sealed.
+document-set and content digests still match what the collector sealed.
 
     az storage blob download --auth-mode login --account-name <evidence acct> \
         -c reports -n "<folder>/manifest.json" -f manifest.json
@@ -52,7 +52,7 @@ def main(path: str) -> int:
 
     snaps = list(
         db.get_container_client("snapshots").query_items(
-            "SELECT c.id FROM c WHERE c.runId = @r",
+            "SELECT * FROM c WHERE c.runId = @r",
             parameters=[{"name": "@r", "value": manifest["runId"]}],
             partition_key=manifest["runId"],
         )
@@ -61,6 +61,16 @@ def main(path: str) -> int:
     sealed = digest == manifest.get("documentSetSha256")
     ok &= sealed
     print(f"  [{'ok' if sealed else 'DIFFERS'}] run {manifest['runId']} document-set digest")
+    if manifest.get("contentSetSha256"):
+        # Same canonical form as functions/*/content_sha256: sorted keys, Cosmos "_" fields dropped.
+        def content(d: dict) -> str:
+            body = {k: v for k, v in d.items() if not k.startswith("_")}
+            return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+
+        lines = (f"{s['id']} {content(s)}" for s in sorted(snaps, key=lambda s: s["id"]))
+        content_ok = hashlib.sha256("\n".join(lines).encode()).hexdigest() == manifest["contentSetSha256"]
+        ok &= content_ok
+        print(f"  [{'ok' if content_ok else 'DIFFERS'}] run {manifest['runId']} content digest")
     print("REPRODUCED" if ok else "NOT REPRODUCED")
     return 0 if ok else 1
 

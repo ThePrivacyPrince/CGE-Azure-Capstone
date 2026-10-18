@@ -28,7 +28,7 @@ Why the non-obvious choices were made, what was traded away, and what production
 ## ADR-006 CI plans, humans apply
 **Decision:** the CI identity is read-only (custom `tf-grc-ci-planner` role + Blob Data Reader on state). PR plans and drift plans run `-lock=false`. Applies are run by a human from a terminal after the PR merges.
 **Why (Lab 6, step 3):** the starter's arming script gave the CI identity Contributor at `mg-grc` and write access to state, while the workflow was "plan-only". A workflow file is editable by the PR it gates, so it cannot be its own security boundary; the identity's actual permissions are the boundary. Fork PRs get a credential-free job only (`static`), and the privileged `plan` job refuses to run unless the PR's head repo is this repo.
-**Residual risk RISK-0005:** the planner role includes `listKeys` because azurerm's refresh reads the Y1 runtime storage key (which is also in state). It can read but not change anything. Removing Y1 (ADR-007) removes this action.
+**Residual risk RISK-0005:** azurerm's refresh reads secrets, so the planner role holds three actions that return them: storage `listKeys` (the Y1 runtime storage key, which is also in state), `Microsoft.Web/sites/config/list/action` (the function app settings, which carry that same key as the `AzureWebJobsStorage` connection string), and Cosmos `listKeys`/`listConnectionStrings` (the evidence account's keys). The Cosmos keys are inert: key auth is disabled on the account, and gate rule TF-STG-005 plus policy `tf-cosmos-no-local-auth` keep it that way. The identity can read but not change anything, and only same-repo PRs and `main` can use it. Removing Y1 (ADR-007) removes the storage key.
 **Production answer:** a separate apply identity bound to a protected GitHub environment with required reviewers, federated only on `environment:production`.
 
 ## ADR-007 Stay on Y1 Consumption for the capstone
@@ -67,4 +67,4 @@ Why the non-obvious choices were made, what was traded away, and what production
 | RISK-0002 | `storageAccounts/write` is broader than one property | Tripwire 2; caller attribution | Azure Policy Modify with a property-scoped RBAC condition if it becomes available | 2027-04-30 |
 | RISK-0003 | Platform-managed encryption keys on Cosmos and evidence storage | Infrastructure-level encryption at rest by default; Entra-only access | CMK in Key Vault with rotation | 2027-04-30 |
 | RISK-0004 | Evidence storage is LRS | WORM, versioning, soft delete, delete lock | GRS/RA-GRS once replication change is validated non-destructive | 2027-04-30 |
-| RISK-0005 | CI planner can call listKeys | Read-only otherwise; no state write; same-repo PRs only | Flex Consumption (ADR-007) | 2027-04-30 |
+| RISK-0005 | CI planner can read the Y1 storage key (listKeys, app settings) and the Cosmos keys | Read-only otherwise; no state write; same-repo PRs only; Cosmos keys inert (key auth disabled, TF-STG-005) | Flex Consumption (ADR-007) | 2027-04-30 |

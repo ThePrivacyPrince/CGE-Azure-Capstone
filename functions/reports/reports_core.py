@@ -67,6 +67,11 @@ class StaleEvidenceError(RuntimeError):
     """The newest completed run is older than the freshness limit."""
 
 
+class EvidenceIntegrityError(RuntimeError):
+    """The run's stored documents no longer match the digests sealed at collection.
+    Raised loudly: a report built on altered evidence would look exactly like a real one."""
+
+
 class CrosswalkError(ValueError):
     """The crosswalk file is malformed. Raised loudly: a silently ignored
     match rule would quietly drop findings from every framework view."""
@@ -160,11 +165,42 @@ def load_snapshots(reader: EvidenceReader, qlog: QueryLog, run_id: str) -> list[
     return qlog.run(reader, "snapshots", Q_RUN_SNAPSHOTS, [{"name": "@runId", "value": run_id}], run_id)
 
 
+def content_sha256(document: dict[str, Any]) -> str:
+    """Canonical content hash. Must stay byte-for-byte identical to
+    ``evidence_core.content_sha256`` (tests/test_reports.py checks they agree)."""
+    body = {k: v for k, v in document.items() if not k.startswith("_")}
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def verify_run_digest(run: dict[str, Any], snapshots: Iterable[dict[str, Any]]) -> bool:
-    """Recompute the manifest digest from the stored documents. A mismatch
-    means the run's evidence changed after it was sealed."""
-    digest = hashlib.sha256("\n".join(sorted({d["id"] for d in snapshots})).encode()).hexdigest()
-    return digest == run.get("documentSetSha256")
+    """Recompute the manifest digests from the stored documents. A mismatch
+    means the run's evidence changed after it was sealed.
+
+    The id digest catches documents added to or removed from a run; the content
+    digest catches a document edited in place. Runs collected before the content
+    digest existed carry only the id digest, and are checked on that alone.
+    """
+    snaps = list(snapshots)
+    ids_ok = hashlib.sha256("\n".join(sorted({d["id"] for d in snaps})).encode()).hexdigest() == run.get(
+        "documentSetSha256"
+    )
+    sealed_content = run.get("contentSetSha256")
+    if sealed_content is None:
+        return ids_ok
+    lines = (f"{d['id']} {content_sha256(d)}" for d in sorted(snaps, key=lambda d: d["id"]))
+    content_ok = hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest() == sealed_content
+    return ids_ok and content_ok
+
+
+def require_sealed_run(run: dict[str, Any], snapshots: list[dict[str, Any]]) -> bool:
+    if not verify_run_digest(run, snapshots):
+        LOG.error("run %s digest mismatch: evidence changed after the run was sealed", run["runId"])
+        raise EvidenceIntegrityError(
+            f"run {run['runId']}: stored snapshots no longer match the digests sealed at collection; "
+            "refusing to publish a report from altered evidence"
+        )
+    return True
 
 
 # --------------------------------------------------------------------------- crosswalk
@@ -512,6 +548,7 @@ def _lineage(run: dict[str, Any], digest_ok: bool, crosswalk: Crosswalk, qlog: Q
         "runCompletedAt": run["completedAt"],
         "runTrigger": run.get("trigger"),
         "documentSetSha256": run.get("documentSetSha256"),
+        "contentSetSha256": run.get("contentSetSha256"),
         "digestVerified": digest_ok,
         "crosswalkVersion": crosswalk.version,
         "queries": qlog.entries,
@@ -526,9 +563,7 @@ def generate_poam(
     qlog = QueryLog()
     run = latest_completed_run(reader, qlog, now, max_age_hours)
     snaps = load_snapshots(reader, qlog, run["runId"])
-    digest_ok = verify_run_digest(run, snaps)
-    if not digest_ok:
-        LOG.error("run %s digest mismatch: evidence changed after the run was sealed", run["runId"])
+    digest_ok = require_sealed_run(run, snaps)
     xwalk = load_crosswalk(reader, qlog, run["crosswalkVersion"])
     open_keys = sorted({d["findingKey"] for d in snaps if d.get("result") in OPEN_RESULTS})
     seen = first_seen(reader, qlog, open_keys)
@@ -558,7 +593,7 @@ def generate_sar(
     qlog = QueryLog()
     run = latest_completed_run(reader, qlog, now, max_age_hours)
     snaps = load_snapshots(reader, qlog, run["runId"])
-    digest_ok = verify_run_digest(run, snaps)
+    digest_ok = require_sealed_run(run, snaps)
     xwalk = load_crosswalk(reader, qlog, run["crosswalkVersion"])
     prev_run = previous_completed_run(reader, qlog, run)
     prev_snaps = load_snapshots(reader, qlog, prev_run["runId"]) if prev_run else None

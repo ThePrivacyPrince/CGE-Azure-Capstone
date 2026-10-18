@@ -83,6 +83,16 @@ resource "azurerm_monitor_action_group" "grc" {
   tags = local.tags
 }
 
+# Both tripwires look back an hour by event time but only count rows INGESTED in the last
+# 15 minutes. Activity Log rows often reach the workspace several minutes after the event;
+# a plain 15-minute window on TimeGenerated would miss any row that arrived late, and a
+# wider window alone would alert on the same row twice. ingestion_time() gives each row
+# exactly one evaluation, as long as ingestion lag stays under 45 minutes.
+locals {
+  tripwire_window   = "PT1H"
+  tripwire_new_rows = "ingestion_time() > ago(15m)"
+}
+
 # Tripwire 1 - out-of-band change. Any successful write or delete by a caller who is not
 # an approved operator or the remediation identity. (CSF DE.CM-03; 800-53 CM-3, AU-6)
 resource "azurerm_monitor_scheduled_query_rules_alert_v2" "unexpected_writer" {
@@ -94,11 +104,12 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "unexpected_writer" {
   description          = "Out-of-band change detector. Expected callers come from approved_change_callers plus the remediation identity."
   severity             = 2
   evaluation_frequency = "PT15M"
-  window_duration      = "PT15M"
+  window_duration      = local.tripwire_window
 
   criteria {
     query                   = <<-KQL
       AzureActivity
+      | where ${local.tripwire_new_rows}
       | where CategoryValue == "Administrative"
       | where ActivityStatusValue =~ "Success"
       | where OperationNameValue endswith "/WRITE" or OperationNameValue endswith "/DELETE"
@@ -129,11 +140,12 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "remediator_out_of_lan
   description          = "Fires when the remediation identity performs any operation outside its lane (storage property writes, DINE diagnostic deployments)."
   severity             = 1
   evaluation_frequency = "PT15M"
-  window_duration      = "PT15M"
+  window_duration      = local.tripwire_window
 
   criteria {
     query                   = <<-KQL
       AzureActivity
+      | where ${local.tripwire_new_rows}
       | where Caller =~ "${local.remediation_pid}"
       | where OperationNameValue !in~ (${local.remediator_lane_kql})
       | project TimeGenerated, OperationNameValue, ActivityStatusValue, _ResourceId, CorrelationId

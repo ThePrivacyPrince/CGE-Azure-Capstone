@@ -35,7 +35,7 @@ Legend: **Type** = P preventive, D detective, C corrective, G governance.
 |---|---|---|---|---|---|
 | Cosmos DB, Entra-only (`local_authentication_enabled = false`, metadata writes by key blocked) | P | The evidence database we own; no keys to steal | PR.AA (PR.AA-01), PR.DS (PR.DS-01) | IA-2, AC-3 | 8.2.1 / 314.4(c)(1) |
 | `snapshots` container (one doc per finding per run) | D | Evidence history; first-seen dates; any past report re-derivable | ID.IM, GV.OV | AU-11, CA-7 | 10.5.1 / 314.4(d)(2) |
-| `runs` container (run manifests + document-set digest) | D | Reports only use completed runs; tamper with a sealed run and the digest breaks | PR.DS (PR.DS-01) | AU-9, SI-7 | 10.3.2 |
+| `runs` container (run manifests + document-set and content digests) | D | Reports only use completed runs; add, remove or edit a document in a sealed run and the reports refuse to publish | PR.DS (PR.DS-01) | AU-9, SI-7 | 10.3.2 |
 | `assessments` container (latest-state view, kept from the starter) | D | Backward-compatible "now" view | ID.RA | CA-7 | - |
 | `mappings` container (versioned crosswalk) | G | Collect once, map to every framework; each run records the crosswalk version | GV.OV, GV.PO | PM-9 | 12.4.1 |
 | WORM immutability policy on `reports` | P | Report artifacts can't be altered or deleted within retention | PR.DS (PR.DS-01, PR.DS-11) | AU-9, AU-11 | 10.3.2, 10.5.1 / 314.4(c)(8) |

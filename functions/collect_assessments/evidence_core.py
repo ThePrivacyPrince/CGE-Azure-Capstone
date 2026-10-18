@@ -222,6 +222,24 @@ def finding_key(source: str, native_id: str, resource_id: str) -> str:
     return sha256_hex(source, native_id.lower(), resource_id.lower())
 
 
+def content_sha256(document: dict[str, Any]) -> str:
+    """Hash of a document's content in canonical form (sorted keys, no spaces).
+
+    Cosmos adds system fields (``_rid``, ``_etag``, ``_ts``...) on write, so every
+    key starting with ``_`` is left out; what remains is exactly what we wrote.
+    ``reports_core.content_sha256`` must stay byte-for-byte identical to this.
+    """
+    body = {k: v for k, v in document.items() if not k.startswith("_")}
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def content_set_sha256(content_hashes: Mapping[str, str]) -> str:
+    """One digest over every (id, content hash) pair in a run, in id order."""
+    lines = (f"{doc_id} {content_hashes[doc_id]}" for doc_id in sorted(content_hashes))
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
 def document_id(run_id: str, f_key: str) -> str:
     """Unique per run, deterministic within it (idempotent retries)."""
     return sha256_hex(run_id, f_key)
@@ -444,6 +462,8 @@ def run_collection(
     store.upsert("runs", dict(manifest))
 
     doc_ids: list[str] = []
+    # Last write wins, exactly like the upsert: a retried document keeps its newest content.
+    content_hashes: dict[str, str] = {}
     results: dict[str, SourceResult] = {"defender": SourceResult(), "policy": SourceResult()}
 
     def _write(doc: dict[str, Any], source: str) -> None:
@@ -451,6 +471,7 @@ def run_collection(
         if source == "defender":
             store.upsert("assessments", latest_state_document(doc))
         doc_ids.append(doc["id"])
+        content_hashes[doc["id"]] = content_sha256(doc)
         results[source].documents += 1
 
     try:
@@ -487,6 +508,9 @@ def run_collection(
             # Digest over the sorted id set: anyone can recompute it from the stored
             # snapshots and show the run was not added to or trimmed afterwards.
             "documentSetSha256": hashlib.sha256("\n".join(unique_ids).encode()).hexdigest(),
+            # Digest over every document's CONTENT as well: the id digest alone cannot
+            # see a document edited in place (same id, e.g. "fail" changed to "pass").
+            "contentSetSha256": content_set_sha256(content_hashes),
         }
     )
     store.upsert("runs", manifest)

@@ -138,10 +138,47 @@ def test_every_policy_in_terraform_is_in_the_crosswalk(crosswalk):
     assert tf_policies <= mapped, tf_policies - mapped
 
 
-def test_digest_mismatch_is_reported(crosswalk):
+def test_injected_document_refuses_to_publish(crosswalk):
     store = MemoryStore()
     m = collect(store, crosswalk, "Unhealthy", T0)
     store.upsert("snapshots", {"id": "injected", "runId": m["runId"], "findingKey": "x", "result": "pass",
                                "source": "defender", "collectedAt": T0.isoformat(), "displayName": "x"})
+    writer = MemoryWriter()
+    with pytest.raises(rc.EvidenceIntegrityError):
+        rc.generate_poam(MemoryReader(store), writer, now=T0 + timedelta(hours=1))
+    assert writer.blobs == {}  # nothing published
+
+
+def test_document_edited_in_place_refuses_to_publish(crosswalk):
+    # Same id, different content: invisible to the id digest, caught by the content digest.
+    store = MemoryStore()
+    m = collect(store, crosswalk, "Unhealthy", T0)
+    victim = next(d for d in store.all("snapshots") if d["runId"] == m["runId"] and d["result"] == "fail")
+    store.upsert("snapshots", {**victim, "result": "pass", "rawStatus": "Healthy"})
+    writer = MemoryWriter()
+    with pytest.raises(rc.EvidenceIntegrityError):
+        rc.generate_sar(MemoryReader(store), writer, now=T0 + timedelta(hours=1))
+    assert writer.blobs == {}
+
+
+def test_cosmos_system_fields_do_not_break_the_seal(crosswalk):
+    store = MemoryStore()
+    m = collect(store, crosswalk, "Unhealthy", T0)
+    for d in store.all("snapshots"):
+        store.upsert("snapshots", {**d, "_rid": "x", "_etag": "\"0\"", "_ts": 1792279864})
     out = rc.generate_poam(MemoryReader(store), MemoryWriter(), now=T0 + timedelta(hours=1))
-    assert out["digestVerified"] is False
+    assert out["digestVerified"] is True and out["runId"] == m["runId"]
+
+
+def test_collector_and_reporter_hash_content_identically():
+    doc = {"id": "a", "result": "fail", "categories": ["Data"], "severity": None, "displayName": "Ünïcode ok", "_ts": 1}
+    assert ec.content_sha256(doc) == rc.content_sha256(doc)
+
+
+def test_runs_sealed_before_content_digest_still_verify(crosswalk):
+    store = MemoryStore()
+    m = collect(store, crosswalk, "Unhealthy", T0)
+    legacy = {k: v for k, v in m.items() if k != "contentSetSha256"}
+    store.upsert("runs", legacy)
+    out = rc.generate_poam(MemoryReader(store), MemoryWriter(), now=T0 + timedelta(hours=1))
+    assert out["digestVerified"] is True

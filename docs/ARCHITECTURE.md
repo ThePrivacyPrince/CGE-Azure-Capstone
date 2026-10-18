@@ -38,7 +38,7 @@ sequenceDiagram
   C->>AP: query policy states (POST, paginated)
   C->>DF: list assessments (paginated)
   C->>DB: one snapshot per finding (id = sha256(runId|findingKey))
-  C->>DB: run manifest "completed" + document-set digest
+  C->>DB: run manifest "completed" + id and content digests
   R->>DB: newest COMPLETED run, its snapshots, crosswalk version, first-seen history
   R->>W: poam.json + poam.xlsx (+ sar.md, scorecard.json), then manifest.json LAST
   H->>H: reads POA&M, opens PR adding control key + ticket to approvals.auto.tfvars
@@ -98,7 +98,7 @@ The separation of duties is enforced by role **scope**, not by code review: the 
 | Container | Partition key | One document per | Written by | Purpose |
 |---|---|---|---|---|
 | `snapshots` | `/runId` | finding per run | collector | History. `id = sha256(runId \| findingKey)`; `findingKey = sha256(source \| nativeId \| resourceId)` is stable across runs |
-| `runs` | `/runId` | run | collector | Manifest: status, trigger, counts, per-source errors, crosswalk version, `documentSetSha256` |
+| `runs` | `/runId` | run | collector | Manifest: status, trigger, counts, per-source errors, crosswalk version, `documentSetSha256` (ids), `contentSetSha256` (content) |
 | `assessments` | `/subscriptionId` | Defender finding (latest) | collector | Starter's latest-state view, same id formula, kept for compatibility |
 | `mappings` | `/frameworkId` | crosswalk version | collector | `frameworks/mappings.json`, versioned by content hash |
 | `frameworks` | `/frameworkId` | framework element | seed script | NIST CSF 2.0 catalog (Lab 4) |
@@ -113,6 +113,6 @@ Report blobs: `<report>/<yyyy>/<mm>/<dd>/<timestamp>-<executionId>/{artifacts...
 | POA&M | 06:40 daily | After the 06:00 collection has completed |
 | SAR + scorecard | 06:50 daily | Offset from the POA&M |
 | Drift plan (GitHub) | 08:00 daily | After reports, before the working day |
-| Tripwires | every 15 min | Detection latency for out-of-band change |
+| Tripwires | every 15 min (new rows by ingestion time, 1 h look-back) | Detection latency for out-of-band change, without missing Activity Log rows that arrive late |
 
 Azure Policy evaluation, Defender assessment refresh, Activity Log ingestion and these schedules are **not atomic**. A fix made at 10:00 can show as Policy-compliant before Defender re-assesses it. The SAR lists explicit fail -> pass transitions only; a finding that merely disappears is reported as "no longer observed", not as fixed.
