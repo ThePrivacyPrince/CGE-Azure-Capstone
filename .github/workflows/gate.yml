@@ -1,0 +1,138 @@
+name: compliance-gate
+
+# The pipeline enforces policy on your environment. This gate enforces policy on the
+# pipeline. No governance change merges without passing the same kind of scrutiny the
+# pipeline applies to everything else.
+#
+# Capstone redesign (Lab 6, step 3 finding): the starter ran ONE privileged job on every
+# PR, authenticated as an identity holding Contributor at mg-grc. "Plan-only" described
+# the workflow's intent, not the identity's power. This version splits trust in two:
+#
+#   static  - runs on EVERY PR, forks included. No Azure credentials exist in this job.
+#             fmt, tflint, checkov, OPA unit tests, the gate against fixtures, pytest, gitleaks.
+#   plan    - runs only for PRs raised inside this repository. Federates to a READ-ONLY
+#             planner identity (labs/06-loop/arm-your-fork.sh), plans every stage with
+#             -lock=false (it cannot write state, so it must not take the lease), and
+#             runs the OPA gate against the real plan JSON.
+# Make both jobs required status checks on main (docs/RUNBOOK.md, branch protection).
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: static checks (no credentials)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks scans history, not just the tip
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive stages/
+
+      - name: terraform validate (every stage, no backend)
+        run: |
+          for d in stages/*/; do
+            echo "::group::$d"
+            (cd "$d" && terraform init -backend=false -input=false >/dev/null && terraform validate) || exit 1
+            echo "::endgroup::"
+          done
+
+      - uses: terraform-linters/setup-tflint@v4
+      - name: tflint
+        run: |
+          tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
+          tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl" --minimum-failure-severity=error
+
+      - name: checkov (infra)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: stages
+          framework: terraform
+          config_file: .checkov.yaml
+
+      - name: Set up OPA + conftest
+        run: |
+          curl -sSL -o opa https://github.com/open-policy-agent/opa/releases/download/v1.4.2/opa_linux_amd64_static && chmod +x opa
+          curl -sSL https://github.com/open-policy-agent/conftest/releases/download/v0.62.0/conftest_0.62.0_Linux_x86_64.tar.gz | tar xz conftest
+          sudo mv opa conftest /usr/local/bin/
+
+      - name: OPA unit tests (every rule fires on bad input, stays quiet on good)
+        run: opa test policy/ -v
+
+      - name: gate must block the known-bad fixture
+        run: |
+          if conftest test tests/gate-fixtures/bad-plan.json -p policy; then
+            echo "::error::the gate PASSED a plan built to fail - a rule is broken"; exit 1
+          fi
+          conftest test tests/gate-fixtures/good-plan.json -p policy
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: pytest (collector + reports, no cloud)
+        run: |
+          pip install pytest openpyxl
+          pytest -q tests
+
+      - name: gitleaks (auto-fail trigger in the rubric)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  plan:
+    name: plan + OPA gate (${{ matrix.stage }})
+    needs: static
+    # Only PRs from branches in THIS repo get an Azure token. GitHub does not issue OIDC
+    # tokens to fork PRs on pull_request, and this check makes that intent explicit in
+    # code instead of relying on a platform default. Unarmed forks skip cleanly.
+    if: ${{ vars.AZURE_CLIENT_ID != '' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC federation - no client secret stored anywhere
+    strategy:
+      fail-fast: false
+      matrix:
+        stage: [01-foundation, 02-activation, 03-evidence-store, 04-reporting, 06-enforcement, 07-detection]
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_state_storage_account: ${{ vars.STATE_STORAGE_ACCOUNT }}
+      # Repository VARIABLES, not secrets: identifiers, not credentials. The email
+      # values are PII, which is why they live in repo settings and not in the code.
+      TF_VAR_owner_email: ${{ vars.OWNER_EMAIL }}
+      TF_VAR_alert_email: ${{ vars.ALERT_EMAIL }}
+      TF_VAR_approved_change_callers: ${{ vars.APPROVED_CHANGE_CALLERS }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: terraform plan (read-only identity, no state lock)
+        working-directory: stages/${{ matrix.stage }}
+        run: |
+          # backend.hcl is git-ignored, so CI builds the backend config from variables.
+          terraform init -input=false \
+            -backend-config="resource_group_name=rg-grc-tfstate" \
+            -backend-config="storage_account_name=${TF_VAR_state_storage_account}" \
+            -backend-config="container_name=tfstate"
+          terraform plan -input=false -lock=false -out=tf.plan
+          terraform show -json tf.plan > plan.json
+
+      - name: OPA gate (conftest) on the real plan
+        run: |
+          curl -sSL https://github.com/open-policy-agent/conftest/releases/download/v0.62.0/conftest_0.62.0_Linux_x86_64.tar.gz | tar xz conftest
+          ./conftest test stages/${{ matrix.stage }}/plan.json -p policy

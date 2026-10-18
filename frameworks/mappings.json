@@ -1,0 +1,402 @@
+{
+  "schemaVersion": "1.0",
+  "description": "Collect-once crosswalk. The collector stores each platform finding exactly once; reports resolve findings to framework requirements through this file. Changing a mapping never requires re-collecting evidence. The collector uploads this file to the Cosmos 'mappings' container keyed by its SHA-256, and every run manifest records the version in force.",
+  "frameworks": {
+    "nist_csf_2": {
+      "name": "NIST Cybersecurity Framework 2.0"
+    },
+    "nist_800_53_r5": {
+      "name": "NIST SP 800-53 Rev. 5"
+    },
+    "pci_dss_4_0_1": {
+      "name": "PCI DSS v4.0.1"
+    },
+    "soc2_tsc_2017": {
+      "name": "SOC 2 Trust Services Criteria (2017, rev. 2022)"
+    },
+    "glba_safeguards": {
+      "name": "FTC Safeguards Rule, 16 CFR 314.4"
+    }
+  },
+  "severityDefaults": {
+    "policy": "Medium"
+  },
+  "slaDays": {
+    "High": 30,
+    "Medium": 90,
+    "Low": 180
+  },
+  "controls": [
+    {
+      "controlKey": "policy:cge-require-env-tag-rg",
+      "title": "Resource groups carry an env tag (owner accountability)",
+      "match": {
+        "source": "policy",
+        "policyDefinitionName": "cge-require-env-tag-rg"
+      },
+      "severity": "Low",
+      "mappings": {
+        "nist_csf_2": [
+          "ID.AM-01",
+          "GV.RR-02"
+        ],
+        "nist_800_53_r5": [
+          "CM-8",
+          "PM-5"
+        ],
+        "pci_dss_4_0_1": [
+          "12.5.1"
+        ],
+        "soc2_tsc_2017": [
+          "CC2.1"
+        ],
+        "glba_safeguards": [
+          "314.4(c)(2)"
+        ]
+      }
+    },
+    {
+      "controlKey": "policy:cge-deny-public-blob",
+      "title": "Storage accounts deny public blob access",
+      "match": {
+        "source": "policy",
+        "policyDefinitionName": "cge-deny-public-blob"
+      },
+      "severity": "High",
+      "mappings": {
+        "nist_csf_2": [
+          "PR.AA-05",
+          "PR.DS-01"
+        ],
+        "nist_800_53_r5": [
+          "AC-3",
+          "AC-6",
+          "SC-7"
+        ],
+        "pci_dss_4_0_1": [
+          "1.4.1",
+          "7.2.1"
+        ],
+        "soc2_tsc_2017": [
+          "CC6.1",
+          "CC6.6"
+        ],
+        "glba_safeguards": [
+          "314.4(c)(1)"
+        ]
+      }
+    },
+    {
+      "controlKey": "policy:cge-dine-storage-diagnostics",
+      "title": "Storage accounts route diagnostics to the GRC workspace",
+      "match": {
+        "source": "policy",
+        "policyDefinitionName": "cge-dine-storage-diagnostics"
+      },
+      "severity": "Medium",
+      "mappings": {
+        "nist_csf_2": [
+          "PR.PS-04",
+          "DE.CM-09"
+        ],
+        "nist_800_53_r5": [
+          "AU-2",
+          "AU-12",
+          "SI-4"
+        ],
+        "pci_dss_4_0_1": [
+          "10.2.1",
+          "10.4.1"
+        ],
+        "soc2_tsc_2017": [
+          "CC7.2"
+        ],
+        "glba_safeguards": [
+          "314.4(c)(8)"
+        ]
+      }
+    },
+    {
+      "controlKey": "policy:cge-fix-public-blob",
+      "title": "Public blob access corrected by remediation identity",
+      "match": {
+        "source": "policy",
+        "policyDefinitionName": "cge-fix-public-blob"
+      },
+      "severity": "High",
+      "mappings": {
+        "nist_csf_2": [
+          "PR.PS-01",
+          "ID.RA-06"
+        ],
+        "nist_800_53_r5": [
+          "CM-6",
+          "SI-2"
+        ],
+        "pci_dss_4_0_1": [
+          "2.2.1"
+        ],
+        "soc2_tsc_2017": [
+          "CC7.1"
+        ],
+        "glba_safeguards": [
+          "314.4(c)(1)"
+        ]
+      }
+    },
+    {
+      "controlKey": "policy:tf-storage-min-tls12",
+      "title": "Storage accounts require TLS 1.2",
+      "match": {
+        "source": "policy",
+        "policyDefinitionName": "tf-storage-min-tls12"
+      },
+      "severity": "Medium",
+      "mappings": {
+        "nist_csf_2": [
+          "PR.DS-02"
+        ],
+        "nist_800_53_r5": [
+          "SC-8",
+          "SC-13"
+        ],
+        "pci_dss_4_0_1": [
+          "4.2.1"
+        ],
+        "soc2_tsc_2017": [
+          "CC6.7"
+        ],
+        "glba_safeguards": [
+          "314.4(c)(3)"
+        ]
+      }
+    },
+    {
+      "controlKey": "policy:tf-fix-min-tls",
+      "title": "Storage TLS floor corrected by remediation identity",
+      "match": {
+        "source": "policy",
+        "policyDefinitionName": "tf-fix-min-tls"
+      },
+      "severity": "Medium",
+      "mappings": {
+        "nist_csf_2": [
+          "PR.PS-01",
+          "ID.RA-06"
+        ],
+        "nist_800_53_r5": [
+          "CM-6",
+          "SC-8"
+        ],
+        "pci_dss_4_0_1": [
+          "4.2.1"
+        ],
+        "soc2_tsc_2017": [
+          "CC7.1"
+        ],
+        "glba_safeguards": [
+          "314.4(c)(3)"
+        ]
+      }
+    },
+    {
+      "controlKey": "policy:tf-cosmos-no-local-auth",
+      "title": "Cosmos DB rejects key-based authentication",
+      "match": {
+        "source": "policy",
+        "policyDefinitionName": "tf-cosmos-no-local-auth"
+      },
+      "severity": "High",
+      "mappings": {
+        "nist_csf_2": [
+          "PR.AA-01",
+          "PR.AA-03"
+        ],
+        "nist_800_53_r5": [
+          "IA-2",
+          "IA-5",
+          "AC-2"
+        ],
+        "pci_dss_4_0_1": [
+          "8.2.1",
+          "8.6.2"
+        ],
+        "soc2_tsc_2017": [
+          "CC6.1"
+        ],
+        "glba_safeguards": [
+          "314.4(c)(1)"
+        ]
+      }
+    },
+    {
+      "controlKey": "policy:tf-allowed-locations",
+      "title": "Resources deploy only to approved US regions",
+      "match": {
+        "source": "policy",
+        "policyDefinitionName": "tf-allowed-locations"
+      },
+      "severity": "Medium",
+      "mappings": {
+        "nist_csf_2": [
+          "GV.OC-03",
+          "PR.PS-01"
+        ],
+        "nist_800_53_r5": [
+          "SA-9(5)",
+          "CM-7"
+        ],
+        "pci_dss_4_0_1": [
+          "12.5.2"
+        ],
+        "soc2_tsc_2017": [
+          "CC3.2"
+        ],
+        "glba_safeguards": [
+          "314.4(c)(2)"
+        ]
+      }
+    },
+    {
+      "controlKey": "defender:storage-public-access",
+      "title": "Defender: storage account public access disallowed",
+      "match": {
+        "source": "defender",
+        "assessmentName": "51fd8bb1-0db4-bbf1-7e2b-cfcba7eb66a6"
+      },
+      "mappings": {
+        "nist_csf_2": [
+          "PR.DS-01",
+          "DE.CM-09"
+        ],
+        "nist_800_53_r5": [
+          "AC-3",
+          "SC-7",
+          "CA-7"
+        ],
+        "pci_dss_4_0_1": [
+          "1.4.1"
+        ],
+        "soc2_tsc_2017": [
+          "CC6.1"
+        ],
+        "glba_safeguards": [
+          "314.4(c)(1)",
+          "314.4(d)(2)"
+        ]
+      }
+    },
+    {
+      "controlKey": "defender:storage-shared-key",
+      "title": "Defender: storage accounts prevent shared key access",
+      "match": {
+        "source": "defender",
+        "displayNameContains": "shared key access"
+      },
+      "mappings": {
+        "nist_csf_2": [
+          "PR.AA-01",
+          "PR.AA-05"
+        ],
+        "nist_800_53_r5": [
+          "IA-2",
+          "AC-6"
+        ],
+        "pci_dss_4_0_1": [
+          "8.2.2",
+          "7.2.2"
+        ],
+        "soc2_tsc_2017": [
+          "CC6.1"
+        ],
+        "glba_safeguards": [
+          "314.4(c)(1)"
+        ]
+      }
+    },
+    {
+      "controlKey": "defender:storage-network-restriction",
+      "title": "Defender: storage network access restricted (VNet rules / private link)",
+      "match": {
+        "source": "defender",
+        "displayNameContainsAny": [
+          "restrict network access",
+          "private link"
+        ]
+      },
+      "mappings": {
+        "nist_csf_2": [
+          "PR.IR-01"
+        ],
+        "nist_800_53_r5": [
+          "SC-7",
+          "AC-4"
+        ],
+        "pci_dss_4_0_1": [
+          "1.3.1",
+          "1.4.2"
+        ],
+        "soc2_tsc_2017": [
+          "CC6.6"
+        ],
+        "glba_safeguards": [
+          "314.4(c)(1)"
+        ]
+      }
+    },
+    {
+      "controlKey": "defender:secure-transfer",
+      "title": "Defender: secure transfer to storage accounts enabled",
+      "match": {
+        "source": "defender",
+        "displayNameContains": "secure transfer"
+      },
+      "mappings": {
+        "nist_csf_2": [
+          "PR.DS-02"
+        ],
+        "nist_800_53_r5": [
+          "SC-8"
+        ],
+        "pci_dss_4_0_1": [
+          "4.2.1"
+        ],
+        "soc2_tsc_2017": [
+          "CC6.7"
+        ],
+        "glba_safeguards": [
+          "314.4(c)(3)"
+        ]
+      }
+    },
+    {
+      "controlKey": "defender:mfa-privileged",
+      "title": "Defender: MFA on accounts with privileged permissions",
+      "match": {
+        "source": "defender",
+        "displayNameContainsAll": [
+          "owner permissions",
+          "mfa"
+        ]
+      },
+      "mappings": {
+        "nist_csf_2": [
+          "PR.AA-03"
+        ],
+        "nist_800_53_r5": [
+          "IA-2(1)"
+        ],
+        "pci_dss_4_0_1": [
+          "8.4.1",
+          "8.4.2"
+        ],
+        "soc2_tsc_2017": [
+          "CC6.1"
+        ],
+        "glba_safeguards": [
+          "314.4(c)(5)"
+        ]
+      }
+    }
+  ]
+}

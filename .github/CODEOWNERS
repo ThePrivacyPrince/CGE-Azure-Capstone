@@ -1,0 +1,6 @@
+# Changes to enforcement, gate rules, exceptions, and the crosswalk are control changes.
+# With branch protection ("Require review from Code Owners"), none merge without review.
+/stages/06-enforcement/    @ThePrivacyPrince
+/policy/                   @ThePrivacyPrince
+/frameworks/mappings.json  @ThePrivacyPrince
+/.github/workflows/        @ThePrivacyPrince

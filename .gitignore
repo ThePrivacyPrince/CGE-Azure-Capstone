@@ -1,0 +1,28 @@
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+plan.json
+crash.log
+
+# Backend config is machine-generated per learner (bootstrap.sh)
+labs/03-foundation/backend.hcl
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Local scratch
+*.zip
+.DS_Store
+lab1-evidence.json
+
+# Crosswalk is copied into the collector package at deploy time (scripts/deploy-functions.sh);
+# frameworks/mappings.json is the single source of truth.
+functions/collect_assessments/mappings.json
+
+# Local secrets-adjacent inputs (emails, UPNs) never get committed
+*.local.tfvars

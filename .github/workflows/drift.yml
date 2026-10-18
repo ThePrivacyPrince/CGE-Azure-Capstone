@@ -1,0 +1,79 @@
+name: drift-detection
+
+# Detector 1 of 2: does reality still match the code? (Detector 2 - who is touching
+# reality? - is the Activity Log tripwire, codified as alert rules in stages/07-detection.)
+# terraform plan -detailed-exitcode: 0 = clean, 2 = drift. Drift opens an issue with the diff.
+
+on:
+  schedule:
+    - cron: "0 8 * * *"   # nightly, after the 06:00 UTC collection and daily reports
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+
+env:
+  ARM_USE_OIDC: "true"
+  ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  ARM_USE_AZUREAD: "true"
+  TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  TF_VAR_state_storage_account: ${{ vars.STATE_STORAGE_ACCOUNT }}
+  TF_VAR_owner_email: ${{ vars.OWNER_EMAIL }}
+  TF_VAR_alert_email: ${{ vars.ALERT_EMAIL }}
+  TF_VAR_approved_change_callers: ${{ vars.APPROVED_CHANGE_CALLERS }}
+
+jobs:
+  drift:
+    # Runs only in forks that have been armed (Lab 6: labs/06-loop/arm-your-fork.sh).
+    # The upstream GRCEngClub/cgeaz repo is deliberately NOT armed: on a public repo,
+    # a pull_request OIDC subject matches PRs from any fork — arming upstream would
+    # hand fork PRs a path toward the course subscription. Your fork, your identity,
+    # your sandbox subscription only.
+    # Capstone: schedule/workflow_dispatch only ever run on this repo's default branch,
+    # matching the read-only planner's `ref:refs/heads/main` federation subject.
+    if: ${{ vars.AZURE_CLIENT_ID != '' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        stage: [01-foundation, 02-activation, 03-evidence-store, 04-reporting, 06-enforcement, 07-detection]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false # keep the real exit code for -detailed-exitcode
+
+      - name: plan with detailed exit code
+        id: plan
+        working-directory: stages/${{ matrix.stage }}
+        continue-on-error: true
+        run: |
+          # backend.hcl is git-ignored, so CI builds the backend config from variables.
+          terraform init -input=false \
+            -backend-config="resource_group_name=rg-grc-tfstate" \
+            -backend-config="storage_account_name=${TF_VAR_state_storage_account}" \
+            -backend-config="container_name=tfstate"
+          # -lock=false: the planner identity can read state but not write it (or lease it).
+          terraform plan -input=false -lock=false -detailed-exitcode -no-color -out=drift.plan \
+            2>&1 | tee plan-output.txt
+          echo "exitcode=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: open drift issue
+        if: steps.plan.outputs.exitcode == '2'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('stages/${{ matrix.stage }}/plan-output.txt', 'utf8');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Drift detected: stages/${{ matrix.stage }} (${new Date().toISOString().slice(0,10)})`,
+              body: 'Reality no longer matches code. This is a change-management finding that generated itself.\n\n```\n' + body.slice(0, 60000) + '\n```',
+              labels: ['drift'],
+            });

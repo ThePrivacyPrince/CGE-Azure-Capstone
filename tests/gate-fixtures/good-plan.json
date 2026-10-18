@@ -1,0 +1,18 @@
+{
+  "_comment": "Synthetic compliant counterpart of bad-plan.json. Expect: 0 failures.",
+  "resource_changes": [
+    {"address": "azurerm_storage_account.tallyfin_exports", "type": "azurerm_storage_account", "name": "tallyfin_exports",
+     "change": {"actions": ["create"], "after_unknown": {},
+       "after": {"allow_nested_items_to_be_public": false, "shared_access_key_enabled": false, "min_tls_version": "TLS1_2", "https_traffic_only_enabled": true}}},
+    {"address": "azurerm_role_assignment.ci_shortcut", "type": "azurerm_role_assignment", "name": "ci_shortcut",
+     "change": {"actions": ["create"], "after": {"role_definition_name": "Reader"}}},
+    {"address": "azurerm_policy_definition.fix_tls", "type": "azurerm_policy_definition", "name": "fix_tls",
+     "change": {"actions": ["create"], "after": {"policy_rule": "{\"then\":{\"effect\":\"Modify\"}}"}}},
+    {"address": "azurerm_management_group_policy_assignment.fix_tls", "type": "azurerm_management_group_policy_assignment", "name": "fix_tls",
+     "change": {"actions": ["create"], "after": {"identity": [{"type": "UserAssigned", "identity_ids": ["/subscriptions/x/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-grc-remediation-dev"]}]}}}
+  ],
+  "configuration": {"root_module": {"resources": [
+    {"address": "azurerm_management_group_policy_assignment.fix_tls",
+     "expressions": {"policy_definition_id": {"references": ["azurerm_policy_definition.fix_tls.id", "azurerm_policy_definition.fix_tls"]}}}
+  ]}}
+}

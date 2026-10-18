@@ -1,0 +1,8 @@
+# checkov config for CI (gate.yml) and self-check.sh. No global skips: every skipped
+# check is skipped INLINE on the specific resource with its reason, so the exception
+# sits next to the code it excuses and shows up in review.
+framework:
+  - terraform
+compact: true
+quiet: true
+skip-download: true
