@@ -77,3 +77,12 @@ jobs:
               body: 'Reality no longer matches code. This is a change-management finding that generated itself.\n\n```\n' + body.slice(0, 60000) + '\n```',
               labels: ['drift'],
             });
+
+      # continue-on-error above lets the issue step run on drift (exit 2). Anything other
+      # than 0 or 2 (including init failing before an exit code is written) means the
+      # detector itself is broken, which must not read as "no drift".
+      - name: fail if the plan errored
+        if: steps.plan.outputs.exitcode != '0' && steps.plan.outputs.exitcode != '2'
+        run: |
+          echo "::error::terraform plan failed for stages/${{ matrix.stage }} (exitcode='${{ steps.plan.outputs.exitcode }}'); drift could not be checked"
+          exit 1

@@ -26,7 +26,7 @@ It is built on the [CGE-AZ starter](https://github.com/GRCEngClub/cgeaz) (GRC En
 | Remediation identity | Storage Account Contributor (includes listKeys, delete) | **Custom role**: storage property read/write only, keys and delete explicitly excluded |
 | Human gate | `az policy remediation create` by hand | **Approval as code**: a reviewer adds a control key + ticket to `approvals.auto.tfvars` in a CODEOWNERS-protected PR |
 | CI identity | Contributor at `mg-grc` + state write | **Read-only planner** role + state **reader**; plans run `-lock=false`; fork PRs get a credential-free job only |
-| Gate rules | 3 rules, one name-based exception | **14 rules** with **22 OPA unit tests**; expiring, ticketed exceptions; evidence-plane deletion and WORM shortening blocked; fixed a bug where the identity rule could never fire on a real plan |
+| Gate rules | 3 rules, one name-based exception | **12 rules** (11 deny + 1 visibility warning) with **23 OPA unit tests**; expiring, ticketed exceptions; evidence-plane deletion and WORM shortening blocked; fixed a bug where the identity rule could never fire on a real plan |
 | Drift, question 2 | KQL query run by hand | **Stage 07**: Activity Log tripwires as scheduled alert rules (unexpected writer; remediator out of its lane) |
 | Credentials | HTTP triggers with function keys | HTTP triggers **off by default**; manual runs labeled `trigger=manual` in the manifest |
 
@@ -72,7 +72,7 @@ for s in 01-foundation 02-activation 03-evidence-store 04-reporting 06-enforceme
 done
 
 ./scripts/deploy-functions.sh                          # collector + reports code, stamped with the git SHA
-./labs/06-loop/arm-your-fork.sh <github-user>          # read-only CI identity; add the printed repo variables
+./labs/06-loop/arm-your-fork.sh <github-user> CGE-Azure-Capstone   # read-only CI identity; add the printed repo variables
 ```
 
 Stage 06 deploys in **dry-run** by default (`approvals.auto.tfvars`). Nothing is remediated until a reviewer approves a control key.

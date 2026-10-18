@@ -96,6 +96,16 @@ test_audit_only_assignment_without_identity_allowed if {
 	not has_rule(deny, "TF-POL-001") with input as inp
 }
 
+test_parameterized_modify_effect_requires_identity if {
+	# policy_rule only says [parameters('effect')]; the allowed values include Modify.
+	def := object.union(pd("p", "{\"then\":{\"effect\":\"[parameters('effect')]\"}}"), {"change": {"actions": ["create"], "after": {
+		"policy_rule": "{\"then\":{\"effect\":\"[parameters('effect')]\"}}",
+		"parameters": "{\"effect\":{\"allowedValues\":[\"Audit\",\"Modify\"]}}",
+	}}})
+	inp := object.union(cfg("p", "p"), {"resource_changes": [def, pa("p", [])]})
+	has_rule(deny, "TF-POL-001") with input as inp
+}
+
 test_unresolvable_assignment_fails_closed if {
 	# No configuration block, so the definition cannot be proven non-remediating.
 	has_rule(deny, "TF-POL-001") with input as {"resource_changes": [pa("mystery", [])]}

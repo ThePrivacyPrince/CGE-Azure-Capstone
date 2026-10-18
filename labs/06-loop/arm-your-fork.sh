@@ -18,7 +18,8 @@
 set -euo pipefail
 
 GH_USER="${1:?usage: ./arm-your-fork.sh <your-github-username-or-org>}"
-REPO="${2:-cgeaz}"
+# The federation subject must match the repo name exactly (case-sensitive).
+REPO="${2:-CGE-Azure-Capstone}"
 SUB_ID=$(az account show --query id -o tsv)
 TENANT_ID=$(az account show --query tenantId -o tsv)
 

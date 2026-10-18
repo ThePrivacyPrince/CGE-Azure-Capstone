@@ -6,9 +6,14 @@ package main
 
 import rego.v1
 
-exceptions := {"TF-STG-002": {# account holds only the Functions host's scratch data, never evidence. Exit plan: # The Y1 Consumption runtime needs a key-based AzureWebJobsStorage connection. This
-# move to Flex Consumption with identity-based host storage (docs/DECISIONS.md ADR-007).
-"azurerm_storage_account.func_internal": {"ticket": "RISK-0001", "expires": "2027-04-30"}}}
+# TF-STG-002 / azurerm_storage_account.func_internal (RISK-0001): the Y1 Consumption runtime
+# needs a key-based AzureWebJobsStorage connection. This account holds only the Functions
+# host's scratch data, never evidence. Exit plan: move to Flex Consumption with
+# identity-based host storage (docs/DECISIONS.md ADR-007).
+exceptions := {"TF-STG-002": {"azurerm_storage_account.func_internal": {
+	"ticket": "RISK-0001",
+	"expires": "2027-04-30",
+}}}
 
 excepted(address, rule) if {
 	e := exceptions[rule][address]

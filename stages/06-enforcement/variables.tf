@@ -42,4 +42,8 @@ variable "remediation_change_ticket" {
     condition     = can(regex("^[a-z0-9-]{1,24}$", var.remediation_change_ticket))
     error_message = "Use a short lowercase ticket id such as chg-0007."
   }
+  validation {
+    condition     = length(var.approved_remediations) == 0 || var.remediation_change_ticket != "none"
+    error_message = "approved_remediations is not empty: set remediation_change_ticket to the change ticket that approved it."
+  }
 }

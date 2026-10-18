@@ -40,7 +40,16 @@ provably_non_remediating(rc) if {
 		d.type == "azurerm_policy_definition"
 		is_string(d.change.after.policy_rule)
 		not mentions_remediation(d.change.after.policy_rule)
+		not remediating_parameters(d)
 	}
+}
+
+# A parameterized effect ("[parameters('effect')]") hides the effect from policy_rule. If
+# the definition's parameters allow modify/deployIfNotExists, an assignment could pick it.
+remediating_parameters(d) if {
+	params := object.get(d.change.after, "parameters", null)
+	is_string(params)
+	mentions_remediation(params)
 }
 
 mentions_remediation(rule) if {
