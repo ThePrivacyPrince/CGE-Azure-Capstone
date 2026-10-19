@@ -105,7 +105,7 @@ COSMOS_ENDPOINT=$(terraform -chdir=stages/03-evidence-store output -raw cosmos_e
 
 The evidence plane is locked on purpose. To tear down the course sandbox:
 ```bash
-az lock delete --name lock-evidence-cosmos  --resource-group rg-grc-evidence-dev --resource-type Microsoft.DocumentDB/databaseAccounts --resource-name <cosmos account>
-az lock delete --name lock-evidence-storage --resource-group rg-grc-evidence-dev --resource-type Microsoft.Storage/storageAccounts --resource-name <evidence account>
+az lock delete --name lock-evidence-cosmos  --resource-group rg-grc-evidence-dev --resource-type Microsoft.DocumentDB/databaseAccounts --resource-name "<cosmos account>"
+az lock delete --name lock-evidence-storage --resource-group rg-grc-evidence-dev --resource-type Microsoft.Storage/storageAccounts --resource-name "<evidence account>"
 ```
 Then `terraform destroy` stages in reverse order (07, 06, 04, 03, 02, 01). Unexpired WORM blobs block deleting the reports container while the policy is **locked**; it is unlocked in this repo, so remove the immutability policy first if blobs are still in retention. The state resource group lock (`lock-tfstate`) goes last.
