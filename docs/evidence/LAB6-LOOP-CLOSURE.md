@@ -1,6 +1,6 @@
 # Lab 6 - Close the loop (2026-10-17)
 
-Run against the CGE-AZ starter deployment in the sandbox subscription, before the Tallyfin capstone changes. It is the baseline the capstone's design decisions respond to (see [../DECISIONS.md](../DECISIONS.md)).
+Run against the CGE-AZ starter deployment in the sandbox subscription, before the FAFO capstone changes. It is the baseline the capstone's design decisions respond to (see [../DECISIONS.md](../DECISIONS.md)).
 
 ## Sequence
 
@@ -42,7 +42,7 @@ Armed GitHub OIDC CI; a PR blocked by the gate in GitHub; branch protection; sch
 | CI identity: Contributor at `mg-grc` + state write, for a "plan-only" workflow | Read-only planner + credential-free fork path (ADR-006) |
 | Starter gate excepted shared keys by resource **name** prefix | Per-address, ticketed, expiring exceptions (`policy/exceptions.rego`) |
 | Starter identity rule demanded identities on Audit-only assignments | Fail-closed rule that requires identity unless the plan proves non-remediation; also fixed it never firing on real plans (empty list is truthy) |
-| Cosmos doc id excluded runId: each run overwrote the last | `snapshots` per run + `runs` manifests (ADR-008) |
+| Cosmos doc id excluded runId: each run overwrote the last | per-run history (`findings`, ADR-008, ADR-015) + `runs` manifests |
 | Reports chose the newest document's run, possibly a partial sweep | Completed-run selection + staleness refusal (ADR-009) |
 | Same-day report path collision; JSON/XLSX with different timestamps | One execution ID per folder, manifest last (ADR-010) |
 | Manual triggers needed function keys | HTTP triggers off by default; manual runs labeled (ADR-002) |

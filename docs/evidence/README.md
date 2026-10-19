@@ -9,5 +9,6 @@ What the rubric asks you to *demonstrate*, kept as files an assessor can read co
 | [WORM-PROOF.md](WORM-PROOF.md) | Failed delete/overwrite of a report blob, and the attempt in the logs | Evidence Integrity |
 | [GATE-BLOCK.md](GATE-BLOCK.md) | A closed test PR the gate blocked | Pipeline Operations |
 | LOOP-CLOSURE-2.md | The loop again, with approval as code (RUNBOOK C4) | Pipeline Operations |
+| [../SUBMISSION.md](../SUBMISSION.md) → `submission/` | The machine-readable bundle the grader cross-checks against the code: plans, identities, policies, reports, run documents, WORM refusal (RUNBOOK C6) | All four |
 
 How to produce each one: [../RUNBOOK.md](../RUNBOOK.md), section C.
