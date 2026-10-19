@@ -1,4 +1,4 @@
-"""Evidence collection core for the FAFO GRC pipeline (CGE-AZ stage 03).
+"""Evidence collection core for the FAFO Inc. GRC pipeline (CGE-AZ stage 03).
 
 Collect once, store once, stamp everything.
 
@@ -21,10 +21,16 @@ Design choices that close gaps found in the CGE-AZ Lab 6 walkthrough:
   which could be a sweep still being written. Every run here writes a
   manifest first (``started``) and last (``completed``/``partial``/
   ``failed``); reports only ever read ``completed`` runs.
-* **Two sources, collected once.** Defender assessments AND Azure Policy
-  compliance states land in the same snapshot; the framework crosswalk
-  (``frameworks/mappings.json``) maps them to every framework at report time,
-  so no framework ever triggers its own collection.
+* **Scale by scope, not by size.** The collector discovers every subscription
+  its management-group roles can see and collects each one. Nothing names a
+  subscription, and every container's partition key starts with
+  ``/subscriptionId``, so FAFO's second and third subscriptions need neither a
+  code change nor a store reshape.
+* **Three sources, collected once.** Defender assessments and Azure Policy
+  compliance states land in ``findings``; role-assignment snapshots (something
+  Defender does not give you) land in their own ``rbac`` container. The
+  crosswalk (``frameworks/mappings.json``) maps findings to NIST SP 800-53
+  Rev. 5 at report time, so no report ever triggers its own collection.
 * **Trigger provenance.** Each manifest records whether a timer or a human
   started the run, so run history cannot be padded with manual runs unseen.
 * **Two timestamps.** ``collectedAt`` is when we observed the record;
@@ -51,6 +57,12 @@ SCHEMA_VERSION = "2.0"
 
 API_DEFENDER_ASSESSMENTS = "2021-06-01"
 API_POLICY_STATES = "2019-10-01"
+API_RBAC = "2022-04-01"
+API_SUBSCRIPTIONS = "2022-12-01"
+
+# Containers, and why each is partitioned the way it is: docs/ARCHITECTURE.md#evidence-data-model
+FINDINGS = "findings"  # hierarchical key [/subscriptionId, /runId]
+RBAC = "rbac"  # hierarchical key [/subscriptionId, /runId]
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
@@ -312,7 +324,7 @@ def normalize_defender(item: dict[str, Any], ctx: RunContext, subscription_id: s
     }
 
 
-def normalize_policy_state(item: dict[str, Any], ctx: RunContext) -> dict[str, Any]:
+def normalize_policy_state(item: dict[str, Any], ctx: RunContext, subscription_id: str | None = None) -> dict[str, Any]:
     definition = str(item.get("policyDefinitionName", ""))
     assignment_id = str(item.get("policyAssignmentId", ""))
     assignment_name = str(item.get("policyAssignmentName") or assignment_id.rsplit("/", 1)[-1])
@@ -339,11 +351,27 @@ def normalize_policy_state(item: dict[str, Any], ctx: RunContext) -> dict[str, A
         "severity": None,
         "resourceId": resource_id,
         "resourceIdLower": resource_id.lower(),
-        "subscriptionId": item.get("subscriptionId"),
+        # Part of the partition key, so never null: fall back to the subscription queried.
+        "subscriptionId": item.get("subscriptionId") or subscription_id,
         "sourceEvaluatedAt": item.get("timestamp"),
         "collectedAt": ctx.collected_at,
         "collectorVersion": ctx.app_version,
     }
+
+
+# --------------------------------------------------------------------------- scope discovery
+
+
+def discover_subscriptions(arm: ArmClient) -> list[str]:
+    """Every enabled subscription this identity can see.
+
+    Scale by scope, not by size: the collector's roles are granted at the
+    management group (stage 03), so "what it can see" IS the governed estate.
+    FAFO's second and third subscriptions are collected the first run after they
+    are moved under mg-grc-sandbox - no setting, list or redeploy changes.
+    """
+    subs = arm.paginate("GET", f"/subscriptions?api-version={API_SUBSCRIPTIONS}")
+    return sorted(str(s["subscriptionId"]) for s in subs if str(s.get("state", "Enabled")) == "Enabled")
 
 
 # --------------------------------------------------------------------------- sources
@@ -366,11 +394,95 @@ def iter_policy_states(arm: ArmClient, subscription_id: str) -> Iterator[dict[st
     return arm.paginate("POST", url)
 
 
+def iter_role_assignments(arm: ArmClient, subscription_id: str) -> Iterator[dict[str, Any]]:
+    """Every role assignment that applies to the subscription: at it, below it (resource
+    groups, resources) and inherited from above (management groups, root)."""
+    url = f"/subscriptions/{subscription_id}/providers/Microsoft.Authorization/roleAssignments?api-version={API_RBAC}"
+    return arm.paginate("GET", url)
+
+
+def role_definitions(arm: ArmClient, subscription_id: str) -> dict[str, dict[str, str]]:
+    """Role definition GUID -> name and type, so a snapshot says "Owner", not a GUID."""
+    url = f"/subscriptions/{subscription_id}/providers/Microsoft.Authorization/roleDefinitions?api-version={API_RBAC}"
+    out: dict[str, dict[str, str]] = {}
+    for d in arm.paginate("GET", url):
+        props = d.get("properties") or {}
+        out[str(d.get("name", "")).lower()] = {"roleName": str(props.get("roleName", "")), "roleType": str(props.get("type", ""))}
+    return out
+
+
+# --------------------------------------------------------------------------- RBAC snapshots
+
+# Roles that can change resources or grant access. Matched by name AND built-in GUID, because a
+# custom role can be named "Owner" and a built-in can be renamed in a display layer.
+PRIVILEGED_ROLE_NAMES = {"Owner", "Contributor", "User Access Administrator", "Role Based Access Control Administrator"}
+PRIVILEGED_ROLE_GUIDS = {
+    "8e3af657-a8ff-443c-a75c-2fe8c4bcb635",  # Owner
+    "b24988ac-6180-42a0-ab88-20f7382dd24c",  # Contributor
+    "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",  # User Access Administrator
+    "f58310d9-a9f6-439a-9e8d-f62e7b41a168",  # Role Based Access Control Administrator
+}
+
+
+def scope_level(scope: str) -> str:
+    parts = [p.lower() for p in scope.strip("/").split("/") if p]
+    if not parts:
+        return "root"
+    if parts[:2] == ["providers", "microsoft.management"]:
+        return "managementGroup"
+    if parts[0] == "subscriptions":
+        if len(parts) == 2:
+            return "subscription"
+        if len(parts) == 4 and parts[2] == "resourcegroups":
+            return "resourceGroup"
+        return "resource"
+    return "other"
+
+
+def normalize_role_assignment(
+    item: dict[str, Any], ctx: RunContext, subscription_id: str, definitions: Mapping[str, Mapping[str, str]]
+) -> dict[str, Any]:
+    props = item.get("properties") or {}
+    assignment_id = str(item.get("id", ""))
+    scope = str(props.get("scope", ""))
+    role_definition_id = str(props.get("roleDefinitionId", ""))
+    role_guid = role_definition_id.rsplit("/", 1)[-1].lower()
+    definition = definitions.get(role_guid, {})
+    role_name = definition.get("roleName") or "unknown"
+    level = scope_level(scope)
+    return {
+        # One document per assignment PER SUBSCRIPTION VIEW per run: an assignment inherited
+        # from the management group appears under every subscription it reaches, which is
+        # exactly the question "who can act on subscription S?" asks.
+        "id": sha256_hex(ctx.run_id, subscription_id, assignment_id.lower()),
+        "runId": ctx.run_id,
+        "subscriptionId": subscription_id,
+        "schemaVersion": SCHEMA_VERSION,
+        "type": "role-assignment",
+        "assignmentId": assignment_id,
+        "scope": scope,
+        "scopeLevel": level,
+        "inherited": level in ("root", "managementGroup"),
+        "principalId": props.get("principalId"),
+        "principalType": props.get("principalType"),
+        "roleDefinitionId": role_definition_id,
+        "roleName": role_name,
+        "roleType": definition.get("roleType"),
+        "privileged": role_guid in PRIVILEGED_ROLE_GUIDS or role_name in PRIVILEGED_ROLE_NAMES,
+        "condition": props.get("condition"),
+        "createdOn": props.get("createdOn"),
+        "updatedOn": props.get("updatedOn"),
+        "createdBy": props.get("createdBy"),
+        "collectedAt": ctx.collected_at,
+        "collectorVersion": ctx.app_version,
+    }
+
+
 def latest_state_document(snapshot: dict[str, Any]) -> dict[str, Any]:
     """The starter's ``assessments`` document shape, kept so Lab 4-6 queries
     (and anything Frost built on them) keep working. Same id formula as the
     starter, so this upserts onto the existing documents rather than
-    duplicating them. History lives in ``snapshots``; this is "now"."""
+    duplicating them. History lives in ``findings``; this is "now"."""
     starter_id = hashlib.sha256(f"{snapshot['nativeId']}|{snapshot['resourceId']}".encode()).hexdigest()[:32]
     return {
         "id": starter_id,
@@ -418,10 +530,34 @@ class SourceResult:
     errors: list[str] = field(default_factory=list)
 
 
+@dataclass
+class ContainerSeal:
+    """Digests for one container's documents in one run (see run manifests)."""
+
+    content_hashes: dict[str, str] = field(default_factory=dict)  # last write wins, like the upsert
+
+    def add(self, doc: dict[str, Any]) -> None:
+        self.content_hashes[doc["id"]] = content_sha256(doc)
+
+    def seal(self) -> dict[str, Any]:
+        ids = sorted(self.content_hashes)
+        return {
+            "documents": len(ids),
+            # Over the sorted id set: shows the run was not added to or trimmed afterwards.
+            "documentSetSha256": hashlib.sha256("\n".join(ids).encode()).hexdigest(),
+            # Over every document's CONTENT as well: the id digest alone cannot see a
+            # document edited in place (same id, e.g. "fail" changed to "pass").
+            "contentSetSha256": content_set_sha256(self.content_hashes),
+        }
+
+
+SOURCES = ("defender", "policy", "rbac")
+
+
 def run_collection(
     arm: ArmClient,
     store: EvidenceStore,
-    subscription_id: str,
+    management_group: str,
     crosswalk: dict[str, Any],
     *,
     trigger: str = "timer",
@@ -429,12 +565,13 @@ def run_collection(
     now: datetime | None = None,
     run_id: str | None = None,
 ) -> dict[str, Any]:
-    """Collect one complete snapshot and return its manifest.
+    """Collect one complete snapshot of the governed scope and return its manifest.
 
-    Failure handling: one source failing (e.g. Defender throttling) must not
-    discard the other source's evidence, so each source is isolated. But a
-    run with any source error is marked ``partial`` and is never used by
-    reports - missing evidence must not read as "no findings".
+    Scope: every subscription the collector's management-group roles reach
+    (:func:`discover_subscriptions`). Each subscription and each source is
+    isolated, so one throttled API does not discard the rest of the evidence.
+    But a run with ANY source error in ANY subscription is marked ``partial``
+    and is never used by reports - missing evidence must not read as "no findings".
     """
     if trigger not in ("timer", "manual"):
         raise ValueError(f"unknown trigger {trigger!r}")
@@ -454,42 +591,67 @@ def run_collection(
         "status": "started",
         "trigger": trigger,
         "startedAt": ctx.collected_at,
-        "subscriptionId": subscription_id,
+        "scope": {"managementGroup": management_group, "subscriptions": []},
         "crosswalkVersion": xwalk["version"],
         "collectorVersion": app_version,
         "schemaVersion": SCHEMA_VERSION,
     }
     store.upsert("runs", dict(manifest))
 
-    doc_ids: list[str] = []
-    # Last write wins, exactly like the upsert: a retried document keeps its newest content.
-    content_hashes: dict[str, str] = {}
-    results: dict[str, SourceResult] = {"defender": SourceResult(), "policy": SourceResult()}
+    results = {name: SourceResult() for name in SOURCES}
+    per_subscription: dict[str, dict[str, Any]] = {}
+    seals = {FINDINGS: ContainerSeal(), RBAC: ContainerSeal()}
+    discovery_errors: list[str] = []
 
-    def _write(doc: dict[str, Any], source: str) -> None:
-        store.upsert("snapshots", doc)
+    def _write(container: str, doc: dict[str, Any], source: str, sub: str) -> None:
+        store.upsert(container, doc)
         if source == "defender":
             store.upsert("assessments", latest_state_document(doc))
-        doc_ids.append(doc["id"])
-        content_hashes[doc["id"]] = content_sha256(doc)
+        seals[container].add(doc)
         results[source].documents += 1
+        per_subscription[sub][source] += 1
+
+    def _collect(source: str, sub: str, body: Callable[[], None]) -> None:
+        try:
+            body()
+        except Exception as exc:  # noqa: BLE001 - recorded in the manifest, not swallowed
+            LOG.exception("%s collection failed for subscription %s", source, sub)
+            message = f"{sub}: {exc}"
+            results[source].errors.append(message)
+            per_subscription[sub]["errors"].append(f"{source}: {exc}")
 
     try:
-        for item in iter_defender(arm, subscription_id):
-            _write(normalize_defender(item, ctx, subscription_id), "defender")
-    except Exception as exc:  # noqa: BLE001 - recorded in the manifest, not swallowed
-        LOG.exception("defender collection failed")
-        results["defender"].errors.append(str(exc))
-
-    try:
-        for item in iter_policy_states(arm, subscription_id):
-            _write(normalize_policy_state(item, ctx), "policy")
+        subscriptions = discover_subscriptions(arm)
     except Exception as exc:  # noqa: BLE001
-        LOG.exception("policy state collection failed")
-        results["policy"].errors.append(str(exc))
+        LOG.exception("subscription discovery failed")
+        subscriptions = []
+        discovery_errors.append(str(exc))
+    if not subscriptions and not discovery_errors:
+        discovery_errors.append(f"no enabled subscriptions visible under {management_group}")
+    manifest["scope"]["subscriptions"] = subscriptions
 
-    errors = [e for r in results.values() for e in r.errors]
-    total = len(doc_ids)
+    for sub in subscriptions:
+        per_subscription[sub] = {name: 0 for name in SOURCES} | {"errors": []}
+
+        def defender(sub: str = sub) -> None:
+            for item in iter_defender(arm, sub):
+                _write(FINDINGS, normalize_defender(item, ctx, sub), "defender", sub)
+
+        def policy(sub: str = sub) -> None:
+            for item in iter_policy_states(arm, sub):
+                _write(FINDINGS, normalize_policy_state(item, ctx, sub), "policy", sub)
+
+        def rbac(sub: str = sub) -> None:
+            definitions = role_definitions(arm, sub)
+            for item in iter_role_assignments(arm, sub):
+                _write(RBAC, normalize_role_assignment(item, ctx, sub, definitions), "rbac", sub)
+
+        _collect("defender", sub, defender)
+        _collect("policy", sub, policy)
+        _collect("rbac", sub, rbac)
+
+    errors = discovery_errors + [e for r in results.values() for e in r.errors]
+    total = sum(r.documents for r in results.values())
     if not errors:
         status = "completed"
     elif total:
@@ -497,31 +659,34 @@ def run_collection(
     else:
         status = "failed"
 
-    unique_ids = sorted(set(doc_ids))
+    findings_seal = seals[FINDINGS].seal()
     manifest.update(
         {
             "status": status,
             "completedAt": utc_now_iso(),
             "documentCount": total,
-            "uniqueDocumentCount": len(unique_ids),
+            "uniqueDocumentCount": findings_seal["documents"] + seals[RBAC].seal()["documents"],
             "sources": {name: {"documents": r.documents, "errors": r.errors} for name, r in results.items()},
-            # Digest over the sorted id set: anyone can recompute it from the stored
-            # snapshots and show the run was not added to or trimmed afterwards.
-            "documentSetSha256": hashlib.sha256("\n".join(unique_ids).encode()).hexdigest(),
-            # Digest over every document's CONTENT as well: the id digest alone cannot
-            # see a document edited in place (same id, e.g. "fail" changed to "pass").
-            "contentSetSha256": content_set_sha256(content_hashes),
+            "subscriptionResults": per_subscription,
+            "discoveryErrors": discovery_errors,
+            # Per-container seals. The top-level digests below are the findings seal, kept
+            # at the top level because every report verifies them.
+            "containers": {FINDINGS: findings_seal, RBAC: seals[RBAC].seal()},
+            "documentSetSha256": findings_seal["documentSetSha256"],
+            "contentSetSha256": findings_seal["contentSetSha256"],
         }
     )
     store.upsert("runs", manifest)
     LOG.info(
-        "run %s %s (%s): %d documents (%d defender, %d policy)",
+        "run %s %s (%s): %d subscriptions, %d documents (%d defender, %d policy, %d rbac)",
         ctx.run_id,
         status,
         trigger,
+        len(subscriptions),
         total,
         results["defender"].documents,
         results["policy"].documents,
+        results["rbac"].documents,
     )
     return manifest
 

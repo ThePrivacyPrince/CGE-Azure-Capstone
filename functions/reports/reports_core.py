@@ -69,7 +69,13 @@ Q_PREVIOUS_COMPLETED = (
     "SELECT TOP 1 * FROM c WHERE c.type = 'run-manifest' AND c.status = 'completed' "
     "AND c.completedAt < @before ORDER BY c.completedAt DESC"
 )
-Q_RUN_SNAPSHOTS = "SELECT * FROM c WHERE c.runId = @runId"
+# findings and rbac are partitioned [/subscriptionId, /runId]: reading one run is a fan-out
+# across subscriptions (cheap: one partition per subscription for that run), and the same query
+# text works for both containers.
+Q_RUN_DOCS = "SELECT * FROM c WHERE c.runId = @runId"
+Q_RUN_SNAPSHOTS = Q_RUN_DOCS  # name kept for older callers
+FINDINGS = "findings"
+RBAC = "rbac"
 Q_CROSSWALK = "SELECT * FROM c WHERE c.id = @id"
 Q_FIRST_SEEN = (
     "SELECT c.findingKey, c.collectedAt FROM c "
@@ -182,8 +188,13 @@ def previous_completed_run(reader: EvidenceReader, qlog: QueryLog, run: dict[str
 
 
 def load_snapshots(reader: EvidenceReader, qlog: QueryLog, run_id: str) -> list[dict[str, Any]]:
-    # Single-partition read: snapshots are partitioned by runId.
-    return qlog.run(reader, "snapshots", Q_RUN_SNAPSHOTS, [{"name": "@runId", "value": run_id}], run_id)
+    """Every finding of one run, across every subscription in scope."""
+    return qlog.run(reader, FINDINGS, Q_RUN_DOCS, [{"name": "@runId", "value": run_id}])
+
+
+def load_rbac(reader: EvidenceReader, qlog: QueryLog, run_id: str) -> list[dict[str, Any]]:
+    """Every role-assignment snapshot of one run, across every subscription in scope."""
+    return qlog.run(reader, RBAC, Q_RUN_DOCS, [{"name": "@runId", "value": run_id}])
 
 
 def content_sha256(document: dict[str, Any]) -> str:
@@ -212,6 +223,26 @@ def verify_run_digest(run: dict[str, Any], snapshots: Iterable[dict[str, Any]]) 
     lines = (f"{d['id']} {content_sha256(d)}" for d in sorted(snaps, key=lambda d: d["id"]))
     content_ok = hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest() == sealed_content
     return ids_ok and content_ok
+
+
+def verify_container_seal(run: dict[str, Any], container: str, docs: Iterable[dict[str, Any]]) -> bool:
+    """Same check as verify_run_digest, against the run's per-container seal. Runs sealed
+    before per-container seals existed have nothing to check for that container."""
+    seal = (run.get("containers") or {}).get(container)
+    if seal is None:
+        return True
+    return verify_run_digest(
+        {"documentSetSha256": seal["documentSetSha256"], "contentSetSha256": seal.get("contentSetSha256")}, docs
+    )
+
+
+def require_sealed_container(run: dict[str, Any], container: str, docs: list[dict[str, Any]]) -> bool:
+    if not verify_container_seal(run, container, docs):
+        LOG.error("run %s %s seal mismatch", run["runId"], container)
+        raise EvidenceIntegrityError(
+            f"run {run['runId']}: stored {container} documents no longer match the seal; refusing to publish"
+        )
+    return True
 
 
 def require_sealed_run(run: dict[str, Any], snapshots: list[dict[str, Any]]) -> bool:
@@ -309,12 +340,12 @@ def load_crosswalk(reader: EvidenceReader, qlog: QueryLog, version: str) -> Cros
 
 def first_seen(reader: EvidenceReader, qlog: QueryLog, keys: list[str], batch: int = 100) -> dict[str, str]:
     """Earliest stored observation of each finding failing. Uses history in
-    ``snapshots``; history began when this collector was deployed, which the
+    ``findings``; history began when this collector was deployed, which the
     POA&M states rather than hides."""
     earliest: dict[str, str] = {}
     for i in range(0, len(keys), batch):
         chunk = keys[i : i + batch]
-        for row in qlog.run(reader, "snapshots", Q_FIRST_SEEN, [{"name": "@keys", "value": chunk}]):
+        for row in qlog.run(reader, FINDINGS, Q_FIRST_SEEN, [{"name": "@keys", "value": chunk}]):
             k, ts = row["findingKey"], row["collectedAt"]
             if k not in earliest or _parse_ts(ts) < _parse_ts(earliest[k]):
                 earliest[k] = ts
@@ -484,6 +515,38 @@ def build_scorecard(
     }
 
 
+def build_privileged_access(rbac_docs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Access-review view from role-assignment snapshots (AC-2, AC-6(5), AC-6(7)).
+
+    Per subscription: how many assignments apply, how many are privileged, and every
+    standing Owner granted directly at subscription scope - the population the
+    fafo-audit-subscription-owner policy flags, recounted from stored snapshots.
+    """
+    by_sub: dict[str, dict[str, Any]] = {}
+    for d in rbac_docs:
+        sub = str(d.get("subscriptionId"))
+        row = by_sub.setdefault(sub, {"assignments": 0, "privileged": 0, "inheritedPrivileged": 0, "subscriptionOwners": []})
+        row["assignments"] += 1
+        if d.get("privileged"):
+            row["privileged"] += 1
+            if d.get("inherited"):
+                row["inheritedPrivileged"] += 1
+        if d.get("roleName") == "Owner" and d.get("scopeLevel") == "subscription":
+            row["subscriptionOwners"].append(
+                {"principalId": d.get("principalId"), "principalType": d.get("principalType"), "snapshotId": d["id"]}
+            )
+    for row in by_sub.values():
+        row["subscriptionOwners"].sort(key=lambda o: str(o["principalId"]))
+    return {
+        "subscriptions": dict(sorted(by_sub.items())),
+        "totals": {
+            "assignments": sum(r["assignments"] for r in by_sub.values()),
+            "privileged": sum(r["privileged"] for r in by_sub.values()),
+            "subscriptionOwners": sum(len(r["subscriptionOwners"]) for r in by_sub.values()),
+        },
+    }
+
+
 def render_sar_markdown(scorecard: dict[str, Any], poam: dict[str, Any], lineage: dict[str, Any]) -> str:
     s = poam["summary"]
     lines = [
@@ -492,6 +555,8 @@ def render_sar_markdown(scorecard: dict[str, Any], poam: dict[str, Any], lineage
         f"- **Report execution:** `{lineage['reportExecutionId']}` at {lineage['generatedAt']}",
         f"- **Evidence run:** `{lineage['runId']}` (completed {lineage['runCompletedAt']}, digest verified: {lineage['digestVerified']})",
         f"- **Crosswalk version:** `{lineage['crosswalkVersion']}`",
+        f"- **Scope:** management group `{(lineage.get('scope') or {}).get('managementGroup')}`, "
+        f"{len((lineage.get('scope') or {}).get('subscriptions') or [])} subscription(s)",
         f"- **Open findings:** {s['open']} ({s['overdue']} overdue) - by severity: "
         + (", ".join(f"{k} {v}" for k, v in sorted(s["bySeverity"].items())) or "none"),
         f"- **Unmapped open findings:** {scorecard['unmappedOpenFindings']} (gaps in the crosswalk, listed in the POA&M as controlKey=unmapped)",
@@ -518,6 +583,23 @@ def render_sar_markdown(scorecard: dict[str, Any], poam: dict[str, Any], lineage
             ]
         else:
             lines.append("_No stored evidence maps to this framework in this run._")
+        lines.append("")
+    pa = scorecard.get("privilegedAccess")
+    if pa is not None:
+        lines += [
+            "## Privileged access (role-assignment snapshots)",
+            "",
+            f"{pa['totals']['assignments']} role assignments apply across the scope; {pa['totals']['privileged']} are privileged "
+            f"(Owner, Contributor, User Access Administrator, RBAC Administrator); "
+            f"{pa['totals']['subscriptionOwners']} are standing Owner grants at subscription scope (AC-6(5), AC-6(7)).",
+            "",
+            "| Subscription | assignments | privileged | privileged (inherited) | subscription Owners |",
+            "|---|---|---|---|---|",
+        ]
+        lines += [
+            f"| `{sub}` | {r['assignments']} | {r['privileged']} | {r['inheritedPrivileged']} | {len(r['subscriptionOwners'])} |"
+            for sub, r in pa["subscriptions"].items()
+        ]
         lines.append("")
     d = scorecard["deltaFromPreviousRun"]
     lines += ["## Change since previous completed run", ""]
@@ -585,6 +667,8 @@ def _lineage(run: dict[str, Any], digest_ok: bool, crosswalk: Crosswalk, qlog: Q
         "contentSetSha256": run.get("contentSetSha256"),
         "digestVerified": digest_ok,
         "crosswalkVersion": crosswalk.version,
+        "scope": run.get("scope"),
+        "containerSeals": run.get("containers"),
         "queries": qlog.entries,
     }
 
@@ -631,10 +715,13 @@ def generate_sar(
     xwalk = load_crosswalk(reader, qlog, run["crosswalkVersion"])
     prev_run = previous_completed_run(reader, qlog, run)
     prev_snaps = load_snapshots(reader, qlog, prev_run["runId"]) if prev_run else None
+    rbac_docs = load_rbac(reader, qlog, run["runId"])
+    require_sealed_container(run, RBAC, rbac_docs)
     open_keys = sorted({d["findingKey"] for d in snaps if d.get("result") in OPEN_RESULTS})
     seen = first_seen(reader, qlog, open_keys)
     poam = build_poam(run, snaps, xwalk, seen, now)
     scorecard = build_scorecard(snaps, prev_snaps, xwalk)
+    scorecard["privilegedAccess"] = build_privileged_access(rbac_docs)
     lineage = _lineage(run, digest_ok, xwalk, qlog, now, app_version)
     lineage["previousRunId"] = prev_run["runId"] if prev_run else None
     return publish(

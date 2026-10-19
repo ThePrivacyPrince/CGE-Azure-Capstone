@@ -7,7 +7,10 @@ import pytest
 
 import evidence_core as ec
 import reports_core as rc
-from conftest import SEED, SUB, FakeCredential, FakeResponse, FakeSession, MemoryReader, MemoryStore, MemoryWriter, defender_item, policy_item
+from conftest import (
+    MG, SEED, SUB, FakeCredential, FakeResponse, FakeSession, MemoryReader, MemoryStore, MemoryWriter, defender_item,
+    policy_item, rbac_routes, subscriptions_route,
+)
 
 DEF_PATH = f"/subscriptions/{SUB}/providers/Microsoft.Security/assessments"
 POL_PATH = f"/subscriptions/{SUB}/providers/Microsoft.PolicyInsights/policyStates/latest/queryResults"
@@ -22,9 +25,11 @@ def collect(store, crosswalk, public_access_status, now, tls_state="NonCompliant
             defender_item("bbbb", "Some brand new Defender check", "Unhealthy", severity="Low"),
         ]})],
         ("POST", POL_PATH): [FakeResponse(200, {"value": [policy_item("fafo-storage-min-tls12", tls_state)]})],
+        **subscriptions_route(SUB),
+        **rbac_routes(SUB),
     }
     client = ec.ArmClient(FakeCredential(), FakeSession(routes), sleep=lambda s: None, audit=lambda e: None)
-    m = ec.run_collection(client, store, SUB, crosswalk, now=now)
+    m = ec.run_collection(client, store, MG, crosswalk, now=now)
     # completedAt is wall-clock in the collector; pin it for deterministic tests.
     m["completedAt"] = (now + timedelta(minutes=5)).isoformat()
     store.upsert("runs", m)
@@ -144,7 +149,7 @@ def test_every_policy_in_terraform_is_in_the_crosswalk(crosswalk):
 def test_injected_document_refuses_to_publish(crosswalk):
     store = MemoryStore()
     m = collect(store, crosswalk, "Unhealthy", T0)
-    store.upsert("snapshots", {"id": "injected", "runId": m["runId"], "findingKey": "x", "result": "pass",
+    store.upsert("findings", {"id": "injected", "runId": m["runId"], "findingKey": "x", "result": "pass",
                                "source": "defender", "collectedAt": T0.isoformat(), "displayName": "x"})
     writer = MemoryWriter()
     with pytest.raises(rc.EvidenceIntegrityError):
@@ -156,8 +161,8 @@ def test_document_edited_in_place_refuses_to_publish(crosswalk):
     # Same id, different content: invisible to the id digest, caught by the content digest.
     store = MemoryStore()
     m = collect(store, crosswalk, "Unhealthy", T0)
-    victim = next(d for d in store.all("snapshots") if d["runId"] == m["runId"] and d["result"] == "fail")
-    store.upsert("snapshots", {**victim, "result": "pass", "rawStatus": "Healthy"})
+    victim = next(d for d in store.all("findings") if d["runId"] == m["runId"] and d["result"] == "fail")
+    store.upsert("findings", {**victim, "result": "pass", "rawStatus": "Healthy"})
     writer = MemoryWriter()
     with pytest.raises(rc.EvidenceIntegrityError):
         rc.generate_sar(MemoryReader(store), writer, now=T0 + timedelta(hours=1))
@@ -167,8 +172,8 @@ def test_document_edited_in_place_refuses_to_publish(crosswalk):
 def test_cosmos_system_fields_do_not_break_the_seal(crosswalk):
     store = MemoryStore()
     m = collect(store, crosswalk, "Unhealthy", T0)
-    for d in store.all("snapshots"):
-        store.upsert("snapshots", {**d, "_rid": "x", "_etag": "\"0\"", "_ts": 1792279864})
+    for d in store.all("findings"):
+        store.upsert("findings", {**d, "_rid": "x", "_etag": "\"0\"", "_ts": 1792279864})
     out = rc.generate_poam(MemoryReader(store), MemoryWriter(), now=T0 + timedelta(hours=1))
     assert out["digestVerified"] is True and out["runId"] == m["runId"]
 
@@ -185,3 +190,37 @@ def test_runs_sealed_before_content_digest_still_verify(crosswalk):
     store.upsert("runs", legacy)
     out = rc.generate_poam(MemoryReader(store), MemoryWriter(), now=T0 + timedelta(hours=1))
     assert out["digestVerified"] is True
+
+
+def test_sar_reports_privileged_access_from_rbac_snapshots(crosswalk):
+    store = MemoryStore()
+    collect(store, crosswalk, "Unhealthy", T0)
+    writer = MemoryWriter()
+    out = rc.generate_sar(MemoryReader(store), writer, now=T0 + timedelta(hours=1))
+    card = json.loads(writer.blobs[out["files"]["scorecard.json"]["path"]])
+    pa = card["privilegedAccess"]
+    assert pa["totals"] == {"assignments": 2, "privileged": 1, "subscriptionOwners": 1}
+    assert pa["subscriptions"][SUB]["subscriptionOwners"][0]["principalId"] == "user-1"
+    md = writer.blobs[out["files"]["sar.md"]["path"]].decode()
+    assert "Privileged access" in md and "1 subscription(s)" in md
+    # The number in the report is reproducible: the rbac query is in the receipts.
+    assert any(q["container"] == "rbac" for q in out["queries"])
+
+
+def test_tampered_rbac_snapshot_refuses_to_publish(crosswalk):
+    store = MemoryStore()
+    collect(store, crosswalk, "Unhealthy", T0)
+    owner = next(d for d in store.all("rbac") if d["roleName"] == "Owner")
+    store.upsert("rbac", {**owner, "roleName": "Reader", "privileged": False})  # hide a standing Owner
+    with pytest.raises(rc.EvidenceIntegrityError):
+        rc.generate_sar(MemoryReader(store), MemoryWriter(), now=T0 + timedelta(hours=1))
+
+
+def test_poam_open_count_equals_failing_findings_in_the_run(crosswalk):
+    """The grader's recompute: the report's number must equal the stored documents' count."""
+    store = MemoryStore()
+    m = collect(store, crosswalk, "Unhealthy", T0)
+    out = rc.generate_poam(MemoryReader(store), (w := MemoryWriter()), now=T0 + timedelta(hours=1))
+    body = json.loads(w.blobs[out["files"]["poam.json"]["path"]])
+    failing = [d for d in store.all("findings") if d["runId"] == m["runId"] and d["result"] == "fail"]
+    assert body["summary"]["open"] == len(failing)

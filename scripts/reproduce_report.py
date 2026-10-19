@@ -51,26 +51,40 @@ def main(path: str) -> int:
         print(f"  [{status}] {q['container']}: {len(rows)} rows (report saw {q['rowCount']})")
 
     snaps = list(
-        db.get_container_client("snapshots").query_items(
+        db.get_container_client("findings").query_items(
             "SELECT * FROM c WHERE c.runId = @r",
             parameters=[{"name": "@r", "value": manifest["runId"]}],
-            partition_key=manifest["runId"],
+            enable_cross_partition_query=True,  # [/subscriptionId, /runId]: one partition per subscription
         )
     )
     digest = hashlib.sha256("\n".join(sorted({s["id"] for s in snaps})).encode()).hexdigest()
     sealed = digest == manifest.get("documentSetSha256")
     ok &= sealed
     print(f"  [{'ok' if sealed else 'DIFFERS'}] run {manifest['runId']} document-set digest")
-    if manifest.get("contentSetSha256"):
-        # Same canonical form as functions/*/content_sha256: sorted keys, Cosmos "_" fields dropped.
-        def content(d: dict) -> str:
-            body = {k: v for k, v in d.items() if not k.startswith("_")}
-            return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+    # Same canonical form as functions/*/content_sha256: sorted keys, Cosmos "_" fields dropped.
+    def content(d: dict) -> str:
+        body = {k: v for k, v in d.items() if not k.startswith("_")}
+        return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
+    if manifest.get("contentSetSha256"):
         lines = (f"{s['id']} {content(s)}" for s in sorted(snaps, key=lambda s: s["id"]))
         content_ok = hashlib.sha256("\n".join(lines).encode()).hexdigest() == manifest["contentSetSha256"]
         ok &= content_ok
         print(f"  [{'ok' if content_ok else 'DIFFERS'}] run {manifest['runId']} content digest")
+    rbac_seal = (manifest.get("containerSeals") or {}).get("rbac")
+    if rbac_seal:
+        rbac = list(
+            db.get_container_client("rbac").query_items(
+                "SELECT * FROM c WHERE c.runId = @r",
+                parameters=[{"name": "@r", "value": manifest["runId"]}],
+                enable_cross_partition_query=True,
+            )
+        )
+        ids_ok = hashlib.sha256("\n".join(sorted({d["id"] for d in rbac})).encode()).hexdigest() == rbac_seal["documentSetSha256"]
+        lines = (f"{d['id']} {content(d)}" for d in sorted(rbac, key=lambda d: d["id"]))
+        content_ok = hashlib.sha256("\n".join(lines).encode()).hexdigest() == rbac_seal["contentSetSha256"]
+        ok &= ids_ok and content_ok
+        print(f"  [{'ok' if ids_ok and content_ok else 'DIFFERS'}] run {manifest['runId']} rbac seal ({len(rbac)} snapshots)")
     print("REPRODUCED" if ok else "NOT REPRODUCED")
     return 0 if ok else 1
 

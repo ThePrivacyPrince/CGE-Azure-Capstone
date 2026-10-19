@@ -1,6 +1,9 @@
 locals {
-  evidence_rg  = data.terraform_remote_state.foundation.outputs.evidence_resource_group_name
-  subscription = data.terraform_remote_state.foundation.outputs.subscription_id
+  evidence_rg = data.terraform_remote_state.foundation.outputs.evidence_resource_group_name
+  # The governed SCOPE. Collector roles attach here, so every subscription that joins the
+  # management group is collected without a change to this stage.
+  mg_id   = data.terraform_remote_state.foundation.outputs.management_group_id
+  mg_name = data.terraform_remote_state.foundation.outputs.management_group_name
   common_tags = {
     env     = var.environment
     purpose = "grc-evidence-plane"
@@ -58,7 +61,7 @@ resource "azurerm_cosmosdb_sql_database" "grc" {
 }
 
 # assessments: LATEST-STATE view, one document per assessment+resource (overwritten each run).
-# Kept as the starter shipped it so Lab 4-6 queries keep working. History lives in `snapshots`.
+# Kept as the starter shipped it so Lab 4-6 queries keep working. History lives in `findings`.
 resource "azurerm_cosmosdb_sql_container" "assessments" {
   name                = "assessments"
   resource_group_name = local.evidence_rg
@@ -85,28 +88,54 @@ resource "azurerm_cosmosdb_sql_container" "mappings" {
   partition_key_paths = ["/frameworkId"]
 }
 
-# --- FAFO: history + run manifests -----------------------------------------
+# --- FAFO: history, run manifests, and the store that scales by scope ------------------
 #
 # Lab 6 finding: the assessments doc id was sha256(assessment|resource), so every run
 # overwrote the last and Cosmos held "now", not history. A POA&M could not say when a
 # finding first appeared, and a past report's numbers could not be re-derived.
 #
-# snapshots: one document per finding PER RUN. id = sha256(runId|findingKey), so history
-#            accumulates and a retried write inside a run is still idempotent. Partitioned
-#            by runId: a report reads exactly one run in a single-partition query.
-# runs:      one manifest per run, written at start ("started") and end ("completed" /
-#            "partial" / "failed") with counts, errors and a digest of the document-id set.
-#            Reports only ever read "completed" runs, so a half-written sweep can never
-#            become a report (the second Lab 6 finding).
-# Both are NEW containers: changing the partition key of `assessments` would force
-# replacement and destroy the evidence already collected.
+# findings: one document per finding PER RUN. id = sha256(runId|findingKey), so history
+#           accumulates and a retried write inside a run is still idempotent.
+# rbac:     one document per role assignment, per subscription it applies to, per run.
+#           The collector Defender does not give us (who can act on what, and since when).
+# runs:     one manifest per run, written at start ("started") and end ("completed" /
+#           "partial" / "failed") with per-subscription counts, errors and a seal (id and
+#           content digests) per container. Reports only ever read "completed" runs.
+#
+# Partition keys, chosen on purpose (full reasoning: docs/ARCHITECTURE.md#evidence-data-model):
+#   findings, rbac -> HIERARCHICAL [/subscriptionId, /runId].
+#     * Subscription first: FAFO arrives with three subscriptions. A new subscription is a new
+#       top-level partition the moment its first document lands - no reshaping, no migration.
+#     * Run second: one subscription's history grows with every run (4 a day). A flat
+#       /subscriptionId key would put all of it in one logical partition and hit Cosmos's
+#       20 GB per-logical-partition cap; with [subscription, run] the cap applies per run.
+#     * The hot reads stay targeted: "this subscription, this run" is a single partition;
+#       "this run, every subscription" is a fan-out to exactly one partition per subscription.
+#   runs -> /runId. A run spans every subscription, so subscription cannot partition it; manifests
+#     are tiny (one per run) and are always read by runId or "newest completed".
+#
+# `snapshots` (the first, /runId-partitioned history container) is retired, not deleted: TF-EVD-001
+# forbids deleting evidence, and the `removed` block below lets Terraform forget it while Azure
+# keeps it and its documents. Changing a partition key in place would force replacement.
 
-resource "azurerm_cosmosdb_sql_container" "snapshots" {
-  name                = "snapshots"
-  resource_group_name = local.evidence_rg
-  account_name        = azurerm_cosmosdb_account.evidence.name
-  database_name       = azurerm_cosmosdb_sql_database.grc.name
-  partition_key_paths = ["/runId"]
+resource "azurerm_cosmosdb_sql_container" "findings" {
+  name                  = "findings"
+  resource_group_name   = local.evidence_rg
+  account_name          = azurerm_cosmosdb_account.evidence.name
+  database_name         = azurerm_cosmosdb_sql_database.grc.name
+  partition_key_paths   = ["/subscriptionId", "/runId"]
+  partition_key_kind    = "MultiHash"
+  partition_key_version = 2
+}
+
+resource "azurerm_cosmosdb_sql_container" "rbac" {
+  name                  = "rbac"
+  resource_group_name   = local.evidence_rg
+  account_name          = azurerm_cosmosdb_account.evidence.name
+  database_name         = azurerm_cosmosdb_sql_database.grc.name
+  partition_key_paths   = ["/subscriptionId", "/runId"]
+  partition_key_kind    = "MultiHash"
+  partition_key_version = 2
 }
 
 resource "azurerm_cosmosdb_sql_container" "runs" {
@@ -115,6 +144,14 @@ resource "azurerm_cosmosdb_sql_container" "runs" {
   account_name        = azurerm_cosmosdb_account.evidence.name
   database_name       = azurerm_cosmosdb_sql_database.grc.name
   partition_key_paths = ["/runId"]
+}
+
+removed {
+  from = azurerm_cosmosdb_sql_container.snapshots
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 # --- Evidence artifact storage: WORM reports container, zero shared keys. ---

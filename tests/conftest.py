@@ -145,6 +145,48 @@ def policy_item(definition: str, state: str, resource: str = SEED, assignment: s
     }
 
 
+MG = "mg-grc-sandbox"
+OWNER_GUID = "8e3af657-a8ff-443c-a75c-2fe8c4bcb635"
+READER_GUID = "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+
+
+def subscriptions_route(*subs: str) -> dict[tuple[str, str], list[FakeResponse]]:
+    """The collector's scope discovery: every subscription its MG-scoped roles can see."""
+    return {("GET", "/subscriptions"): [FakeResponse(200, {"value": [{"subscriptionId": s, "state": "Enabled"} for s in subs]})]}
+
+
+def role_assignment(sub: str, name: str, role_guid: str, scope: str, principal: str, ptype: str = "User") -> dict[str, Any]:
+    return {
+        "id": f"{scope.rstrip('/')}/providers/Microsoft.Authorization/roleAssignments/{name}",
+        "name": name,
+        "properties": {
+            "scope": scope,
+            "roleDefinitionId": f"/subscriptions/{sub}/providers/Microsoft.Authorization/roleDefinitions/{role_guid}",
+            "principalId": principal,
+            "principalType": ptype,
+            "createdOn": "2025-01-01T00:00:00Z",
+        },
+    }
+
+
+def rbac_routes(sub: str, assignments: list[dict[str, Any]] | None = None) -> dict[tuple[str, str], list[FakeResponse]]:
+    """Role definitions + role assignments for one subscription (default: one subscription Owner
+    and one inherited management-group Reader)."""
+    if assignments is None:
+        assignments = [
+            role_assignment(sub, "ra-owner", OWNER_GUID, f"/subscriptions/{sub}", "user-1"),
+            role_assignment(sub, "ra-reader", READER_GUID, f"/providers/Microsoft.Management/managementGroups/{MG}", "sp-1", "ServicePrincipal"),
+        ]
+    base = f"/subscriptions/{sub}/providers/Microsoft.Authorization"
+    return {
+        ("GET", f"{base}/roleDefinitions"): [FakeResponse(200, {"value": [
+            {"name": OWNER_GUID, "properties": {"roleName": "Owner", "type": "BuiltInRole"}},
+            {"name": READER_GUID, "properties": {"roleName": "Reader", "type": "BuiltInRole"}},
+        ]})],
+        ("GET", f"{base}/roleAssignments"): [FakeResponse(200, {"value": assignments})],
+    }
+
+
 @pytest.fixture()
 def crosswalk() -> dict[str, Any]:
     return json.loads((ROOT / "frameworks" / "mappings.json").read_text())

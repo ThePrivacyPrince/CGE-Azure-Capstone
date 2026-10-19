@@ -1,14 +1,19 @@
 """CGE-AZ pipeline - Stage 3 collector (FAFO capstone edition).
 
-Timer fires every 6 hours -> managed identity -> Defender assessments AND Azure
-Policy compliance states -> Cosmos. All logic lives in ``evidence_core.py`` so
+Timer fires every 6 hours -> managed identity -> for every subscription under the
+management group: Defender assessments, Azure Policy compliance states and
+role-assignment snapshots -> Cosmos. All logic lives in ``evidence_core.py`` so
 it can be unit-tested (tests/test_collector.py) without Azure.
 
 What changed from the starter, and why (docs/DECISIONS.md has the long form):
-  * history: one ``snapshots`` document per finding per run, plus the starter's
-    latest-state ``assessments`` document so existing queries keep working;
+  * scope, not size: subscriptions are discovered from the management-group roles,
+    never configured, so a new subscription is collected on the next run;
+  * history: one ``findings`` document per finding per run (partitioned by
+    subscription, then run), plus the starter's latest-state ``assessments``
+    document so existing queries keep working;
+  * a role-assignment collector with its own ``rbac`` container;
   * run manifests in ``runs``: reports only read completed runs;
-  * two evidence sources, mapped to frameworks by ``frameworks/mappings.json``;
+  * findings mapped to NIST SP 800-53 Rev. 5 by ``frameworks/mappings.json``;
   * the HTTP trigger is off unless ENABLE_MANUAL_TRIGGERS=true, because it
     needs a function key (a stored credential), and manual runs are labeled
     as such in the manifest.
@@ -53,7 +58,8 @@ def _collect(trigger: str) -> dict[str, Any]:
     manifest = run_collection(
         arm=ArmClient(credential, requests.Session()),
         store=CosmosEvidenceStore(_required("COSMOS_ENDPOINT"), _required("COSMOS_DATABASE"), credential),
-        subscription_id=_required("SUBSCRIPTION_ID"),
+        # The governed SCOPE, not a subscription: every subscription under it is collected.
+        management_group=_required("MANAGEMENT_GROUP_ID"),
         crosswalk=json.loads(MAPPINGS_PATH.read_text(encoding="utf-8")),
         trigger=trigger,
         app_version=os.environ.get("APP_VERSION", "dev"),

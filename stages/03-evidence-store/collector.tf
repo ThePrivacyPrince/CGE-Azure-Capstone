@@ -72,7 +72,7 @@ resource "azurerm_linux_function_app" "collectors" {
   app_settings = {
     "COSMOS_ENDPOINT"                = azurerm_cosmosdb_account.evidence.endpoint
     "COSMOS_DATABASE"                = azurerm_cosmosdb_sql_database.grc.name
-    "SUBSCRIPTION_ID"                = local.subscription
+    "MANAGEMENT_GROUP_ID"            = local.mg_name
     "SCM_DO_BUILD_DURING_DEPLOYMENT" = "true"
     "ENABLE_ORYX_BUILD"              = "true"
 
@@ -95,10 +95,13 @@ resource "azurerm_linux_function_app" "collectors" {
 }
 
 # --- The collector identity's whitelist: read posture, write evidence. Nothing else. ---
+# Every read role is granted at the MANAGEMENT GROUP, never a subscription: the collector's
+# estate is whatever inherits from mg-grc-sandbox (evidence_core.discover_subscriptions).
 
-# Security Reader at the subscription: read Defender assessments, change nothing.
+# Security Reader at the management group: read Defender assessments and role assignments
+# (it includes Microsoft.Authorization/*/read), change nothing.
 resource "azurerm_role_assignment" "collector_security_reader" {
-  scope                = "/subscriptions/${local.subscription}"
+  scope                = local.mg_id
   role_definition_name = "Security Reader"
   principal_id         = azurerm_linux_function_app.collectors.identity[0].principal_id
 }
@@ -120,7 +123,7 @@ resource "azurerm_cosmosdb_sql_role_assignment" "collector_cosmos_write" {
 # and nothing else - not the broad built-in Reader.
 resource "azurerm_role_definition" "policy_state_reader" {
   name        = "fafo-grc-policy-state-reader"
-  scope       = "/subscriptions/${local.subscription}"
+  scope       = local.mg_id
   description = "Query Azure Policy compliance states. Read-only."
 
   permissions {
@@ -130,11 +133,11 @@ resource "azurerm_role_definition" "policy_state_reader" {
     ]
   }
 
-  assignable_scopes = ["/subscriptions/${local.subscription}"]
+  assignable_scopes = [local.mg_id]
 }
 
 resource "azurerm_role_assignment" "collector_policy_states" {
-  scope              = "/subscriptions/${local.subscription}"
+  scope              = local.mg_id
   role_definition_id = azurerm_role_definition.policy_state_reader.role_definition_resource_id
   principal_id       = azurerm_linux_function_app.collectors.identity[0].principal_id
   principal_type     = "ServicePrincipal"
