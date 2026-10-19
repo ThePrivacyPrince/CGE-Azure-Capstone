@@ -49,10 +49,10 @@ grep -q '"snapshots"' stages/03-evidence-store/main.tf && grep -q '"runs"' stage
   || bad "snapshots/runs containers missing - history would overwrite"
 python3 -c "import json;json.load(open('frameworks/mappings.json'))" 2>/dev/null \
   && ok "framework crosswalk is valid JSON data" || bad "frameworks/mappings.json missing or invalid"
-if python3 -c "import pytest, openpyxl" 2>/dev/null; then
+if python3 -c "import pytest, openpyxl, jsonschema" 2>/dev/null; then
   python3 -m pytest -q tests >/dev/null 2>&1 && ok "pytest: collector + reports" || bad "pytest failures (python3 -m pytest tests)"
 else
-  echo "  (pytest/openpyxl not installed - pip install pytest openpyxl)"
+  echo "  (pytest/openpyxl/jsonschema not installed - pip install pytest openpyxl jsonschema)"
 fi
 
 echo "== Identity design =="

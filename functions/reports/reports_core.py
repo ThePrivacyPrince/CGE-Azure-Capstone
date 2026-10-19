@@ -447,6 +447,102 @@ def render_poam_xlsx(poam: dict[str, Any], lineage: dict[str, Any]) -> bytes:
     return buf.getvalue()
 
 
+# --------------------------------------------------------------------------- OSCAL POA&M
+
+OSCAL_VERSION = "1.1.2"
+# Same namespace as scripts/generate_ssp.py, so system-id and component UUIDs line up with the SSP.
+OSCAL_NAMESPACE = uuid.UUID("6f1c3a52-6a4e-4b4c-9c4d-fa50fa50fa50")
+FAFO_NS = "https://fafo.example/ns/oscal"
+SYSTEM_SHORT_NAME = "FAFO-GRC"
+
+
+def _oscal_uuid(*parts: str) -> str:
+    return str(uuid.uuid5(OSCAL_NAMESPACE, ":".join(parts)))
+
+
+def oscal_control_id(label: str) -> str:
+    """AC-6(5) -> ac-6.5 (OSCAL catalog ids)."""
+    base, _, enh = label.partition("(")
+    return base.lower() + (f".{enh.rstrip(')')}" if enh else "")
+
+
+def build_oscal_poam(poam: dict[str, Any], lineage: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """The same POA&M as poam.json, as an OSCAL 1.1.2 plan-of-action-and-milestones.
+
+    One observation per finding (this run's evidence, pointing at its stored document), one
+    risk per finding (open, with the FedRAMP-timeline deadline), one poam-item tying them
+    together. poam-item and risk UUIDs derive from the findingKey, so the same weakness keeps
+    the same OSCAL identity across days until it closes - exactly like poamId.
+    """
+    observations, risks, items = [], [], []
+    for i in poam["items"]:
+        key = i["evidence"]["findingKey"]
+        obs_uuid = _oscal_uuid("observation", i["evidence"]["runId"], key)
+        risk_uuid = _oscal_uuid("risk", key)
+        controls = i["frameworks"].get(CATALOG, [])
+        control_props = [{"name": "control-id", "ns": FAFO_NS, "value": oscal_control_id(c)} for c in controls]
+        observations.append({
+            "uuid": obs_uuid,
+            "title": i["sourceFinding"] or i["weakness"],
+            "description": f"{i['source']} reported {i['resourceId']} as failing in run {i['evidence']['runId']}.",
+            "props": [
+                {"name": "resource-id", "ns": FAFO_NS, "value": i["resourceId"]},
+                {"name": "evidence-source", "ns": FAFO_NS, "value": i["source"]},
+                *control_props,
+            ],
+            "methods": ["TEST"],
+            "types": ["finding"],
+            "relevant-evidence": [{
+                "href": f"cosmos://grc/findings/{i['evidence']['snapshotId']}",
+                "description": "The stored finding document; its run's seal is in the report manifest.",
+            }],
+            "collected": lineage["runCompletedAt"],
+        })
+        deadline = datetime.fromisoformat(i["scheduledCompletion"]).replace(tzinfo=timezone.utc).isoformat()
+        risks.append({
+            "uuid": risk_uuid,
+            "title": i["weakness"],
+            "description": f"{i['weakness']} on {i['resourceId']}.",
+            "statement": f"Open {i['severity']}-severity weakness first seen {i['firstSeen']}; due {i['scheduledCompletion']} under FedRAMP POA&M timelines.",
+            "props": [{"name": "severity", "ns": FAFO_NS, "value": i["severity"]}, *control_props],
+            "status": "open",
+            "deadline": deadline,
+            "related-observations": [{"observation-uuid": obs_uuid}],
+        })
+        items.append({
+            "uuid": _oscal_uuid("poam-item", key),
+            "title": i["weakness"],
+            "description": f"{i['poamId']}: {i['weakness']} ({i['controlKey']}).",
+            "props": [{"name": "poam-id", "ns": FAFO_NS, "value": i["poamId"]}],
+            "related-observations": [{"observation-uuid": obs_uuid}],
+            "related-risks": [{"risk-uuid": risk_uuid}],
+        })
+    doc: dict[str, Any] = {
+        "uuid": _oscal_uuid("poam", lineage["reportExecutionId"]),
+        "metadata": {
+            "title": "FAFO GRC Pipeline Plan of Action and Milestones",
+            "last-modified": now.isoformat(),
+            "version": lineage["reportExecutionId"],
+            "oscal-version": OSCAL_VERSION,
+            "props": [
+                {"name": "run-id", "ns": FAFO_NS, "value": lineage["runId"]},
+                {"name": "crosswalk-version", "ns": FAFO_NS, "value": lineage["crosswalkVersion"]},
+            ],
+        },
+        "system-id": {"identifier-type": "https://ietf.org/rfc/rfc4122", "id": _oscal_uuid("system", SYSTEM_SHORT_NAME)},
+    }
+    if items:
+        doc.update({"observations": observations, "risks": risks, "poam-items": items})
+    else:
+        # OSCAL requires at least one poam-item; an empty POA&M says so explicitly.
+        doc["poam-items"] = [{
+            "uuid": _oscal_uuid("poam-item", "none", lineage["runId"]),
+            "title": "No open weaknesses",
+            "description": f"Run {lineage['runId']} recorded no failing findings.",
+        }]
+    return {"plan-of-action-and-milestones": doc}
+
+
 # --------------------------------------------------------------------------- SAR + scorecard
 
 
@@ -696,6 +792,10 @@ def generate_poam(
             "poam.xlsx": (
                 render_poam_xlsx(poam, lineage),
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+            "poam.oscal.json": (
+                json.dumps(build_oscal_poam(poam, lineage, now), indent=2, sort_keys=True).encode(),
+                "application/json",
             ),
         },
         lineage,

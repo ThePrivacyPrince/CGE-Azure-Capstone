@@ -77,9 +77,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: pytest (collector + reports, no cloud)
+      - name: pytest (collector, reports, catalog, OSCAL, KQL - no cloud)
         run: |
-          pip install pytest openpyxl
+          pip install pytest openpyxl jsonschema
           pytest -q tests
 
       - name: gitleaks (auto-fail trigger in the rubric)

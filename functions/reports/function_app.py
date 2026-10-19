@@ -5,7 +5,7 @@ has no Azure Resource Manager role, so this is enforced by identity, not just by
 convention. All logic is in ``reports_core.py`` (tested in tests/test_reports.py).
 
 Generators:
-  * POA&M  - daily (POAM_SCHEDULE): poam.json + poam.xlsx + manifest.json
+  * POA&M  - daily (POAM_SCHEDULE): poam.json + poam.xlsx + poam.oscal.json (OSCAL 1.1.2) + manifest.json
   * SAR    - daily (SAR_SCHEDULE): sar.md + scorecard.json (per-framework view
              through the crosswalk, and change since the previous run) + manifest.json
 """
