@@ -1,5 +1,5 @@
 variable "subscription_id" {
-  description = "The governed subscription (TF_VAR_subscription_id). An identifier, not a secret."
+  description = "The subscription that hosts the state account and Lab 2's Activity Log setting (TF_VAR_subscription_id). An identifier, not a secret. Governance does NOT key off it: the routed subscriptions are discovered from the management group."
   type        = string
   validation {
     condition     = can(regex("^[0-9a-fA-F-]{36}$", var.subscription_id))

@@ -12,7 +12,21 @@ resource "azurerm_management_group" "sandbox" {
   display_name               = "GRC Sandbox"
   parent_management_group_id = azurerm_management_group.grc.id
 
-  subscription_ids = [data.azurerm_subscription.current.subscription_id]
+  # Membership is NOT declared here. A subscription list on the management group would make
+  # Terraform remove every subscription someone moves in by hand - FAFO's other two would be
+  # ripped back out on the next apply. Membership is the association below (this sandbox) or
+  # an onboarding move; governance then inherits by scope.
+  lifecycle {
+    ignore_changes = [subscription_ids]
+  }
+}
+
+# The sandbox subscription joins the governed scope. Existing deployments adopt it:
+#   terraform import azurerm_management_group_subscription_association.sandbox \
+#     "/providers/Microsoft.Management/managementGroups/mg-grc-sandbox/subscriptions/$ARM_SUBSCRIPTION_ID"
+resource "azurerm_management_group_subscription_association" "sandbox" {
+  management_group_id = azurerm_management_group.sandbox.id
+  subscription_id     = data.azurerm_subscription.current.id
 }
 
 # --- The sandbox resource group (adopted from Lab 1) ---

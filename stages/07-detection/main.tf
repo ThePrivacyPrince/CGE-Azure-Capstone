@@ -39,17 +39,30 @@ locals {
   }
 }
 
-# Adopt Lab 2's Activity Log routing into code instead of creating a duplicate (Azure
-# rejects two settings that send the same categories to the same workspace). If you never
-# ran route-activity-log.sh, delete this import block and the resource will be created.
+# Every subscription under the management group routes its Activity Log to the one GRC
+# workspace, so the tripwires below see the whole estate. Discovered, not listed: FAFO's next
+# subscription is routed by the next apply (and the nightly drift plan says so until it is).
+data "azurerm_management_group" "governed" {
+  name = local.f.management_group_name
+}
+
+# Adopt Lab 2's routing for the sandbox subscription instead of creating a duplicate (Azure
+# rejects two settings that send the same categories to the same workspace). Import is a
+# no-op once the address is in state. If you never ran route-activity-log.sh, delete this block.
+# If you applied stage 07 before it was per-subscription, first run:
+#   terraform state mv azurerm_monitor_diagnostic_setting.activity_log \
+#     'azurerm_monitor_diagnostic_setting.activity_log["<subscription-guid>"]'
 import {
-  to = azurerm_monitor_diagnostic_setting.activity_log
-  id = "/subscriptions/${var.subscription_id}|${var.activity_log_setting_name}"
+  for_each = toset([var.subscription_id])
+  to       = azurerm_monitor_diagnostic_setting.activity_log[each.key]
+  id       = "/subscriptions/${each.key}|${var.activity_log_setting_name}"
 }
 
 resource "azurerm_monitor_diagnostic_setting" "activity_log" {
+  for_each = toset(data.azurerm_management_group.governed.all_subscription_ids)
+
   name                       = var.activity_log_setting_name
-  target_resource_id         = "/subscriptions/${var.subscription_id}"
+  target_resource_id         = "/subscriptions/${each.key}"
   log_analytics_workspace_id = local.workspace_id
 
   enabled_log {
