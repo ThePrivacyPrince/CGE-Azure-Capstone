@@ -1,0 +1,16 @@
+// FAFO question: did the one identity allowed to fix things do anything other than fix things?
+// The remediation identity's custom role must allow storageAccounts/write, and ARM cannot scope
+// a write to one property (RISK-0002). This query is the compensating control: anything the
+// identity does outside its two jobs - storage property writes (stage 06 Modify) and diagnostic
+// deployments (stage 01 DeployIfNotExists) - is out of lane.
+// 800-53: AC-6(9) log use of privileged functions, AC-6 least privilege, AU-6 audit review.
+//
+// Placeholders (filled by stages/07-detection with templatefile; replace by hand to run ad hoc):
+//   ${new_rows_filter}      alert rules: "| where ingestion_time() > ago(15m)"; ad hoc: delete the line
+//   ${remediator_id}        the remediation identity's principal ID
+//   ${lane_operations}      quoted, comma-separated OperationNameValue list it is allowed to perform
+AzureActivity
+${new_rows_filter}
+| where Caller =~ "${remediator_id}"
+| where OperationNameValue !in~ (${lane_operations})
+| project TimeGenerated, OperationNameValue, ActivityStatusValue, _ResourceId, SubscriptionId, CorrelationId

@@ -7,8 +7,13 @@
 # state - Lab 6's seed storage account was changed out-of-band and no plan would ever have
 # noticed. The Activity Log sees every write in the subscription, managed or not.
 #
-# The starter ran the tripwire as a KQL query by hand (Lab 2). Here it is a scheduled
-# alert rule that runs every 15 minutes whether anyone remembers or not.
+# The starter ran the tripwire as a KQL query by hand (Lab 2). Here every query is a file in
+# kql/ (readable and runnable on its own) and the SAME file becomes a scheduled alert rule via
+# templatefile, so the query an assessor reads is the query that runs. Four rules:
+#   1. unexpected-writer                    (course-derived baseline)
+#   2. remediator-out-of-lane               (FAFO: compensating control for RISK-0002)
+#   3. off-hours-admin-changes              (FAFO: humans changing prod outside the change window)
+#   4. keyvault-secret-reads-non-pipeline   (FAFO: secrets read by anything but approved identities)
 
 locals {
   f = data.terraform_remote_state.foundation.outputs
@@ -33,8 +38,21 @@ locals {
   ]
   remediator_lane_kql = join(", ", [for op in local.remediator_lane : "\"${op}\""])
 
+  # Identities allowed to read Key Vault secrets: the pipeline's own plus any approved app.
+  pipeline_ids = distinct(compact(concat(
+    [
+      local.remediation_pid,
+      data.terraform_remote_state.evidence.outputs.collector_principal_id,
+      data.terraform_remote_state.reporting.outputs.reporter_principal_id,
+    ],
+    var.approved_secret_reader_ids,
+  )))
+  pipeline_ids_kql = join(", ", [for id in local.pipeline_ids : "\"${id}\""])
+
+  kql_dir = "${path.module}/../../kql"
+
   tags = {
-    env     = "dev"
+    env     = var.environment
     purpose = "grc-detection"
   }
 }
@@ -96,39 +114,74 @@ resource "azurerm_monitor_action_group" "grc" {
   tags = local.tags
 }
 
-# Both tripwires look back an hour by event time but only count rows INGESTED in the last
-# 15 minutes. Activity Log rows often reach the workspace several minutes after the event;
-# a plain 15-minute window on TimeGenerated would miss any row that arrived late, and a
-# wider window alone would alert on the same row twice. ingestion_time() gives each row
-# exactly one evaluation, as long as ingestion lag stays under 45 minutes.
+# Every tripwire looks back an hour by event time but only counts rows INGESTED in the last
+# 15 minutes. Activity Log and Key Vault rows often reach the workspace several minutes after the
+# event; a plain 15-minute window on TimeGenerated would miss any row that arrived late, and a
+# wider window alone would alert on the same row twice. ingestion_time() gives each row exactly
+# one evaluation, as long as ingestion lag stays under 45 minutes.
 locals {
   tripwire_window   = "PT1H"
-  tripwire_new_rows = "ingestion_time() > ago(15m)"
+  tripwire_new_rows = "| where ingestion_time() > ago(15m)"
+
+  tripwires = {
+    unexpected-writer = {
+      display_name = "GRC tripwire: change by an unexpected principal"
+      description  = "Out-of-band change detector (course-derived). Expected callers come from approved_change_callers plus the remediation identity."
+      severity     = 2
+      query = templatefile("${local.kql_dir}/unexpected-writer.kql", {
+        new_rows_filter  = local.tripwire_new_rows
+        expected_callers = local.expected_callers_kql
+      })
+    }
+    remediator-out-of-lane = {
+      display_name = "GRC tripwire: remediation identity acted outside its lane"
+      description  = "The remediation identity performed an operation outside storage property writes and DINE diagnostic deployments (RISK-0002 compensating control)."
+      severity     = 1
+      query = templatefile("${local.kql_dir}/remediator-out-of-lane.kql", {
+        new_rows_filter = local.tripwire_new_rows
+        remediator_id   = local.remediation_pid
+        lane_operations = local.remediator_lane_kql
+      })
+    }
+    off-hours-admin-changes = {
+      display_name = "FAFO tripwire: human change outside the change window"
+      description  = "A person (UPN caller) changed resources outside ${var.business_hours.start}:00-${var.business_hours.end}:00 ${var.business_hours.timezone}, Monday to Friday."
+      severity     = 3
+      query = templatefile("${local.kql_dir}/off-hours-admin-changes.kql", {
+        new_rows_filter = local.tripwire_new_rows
+        timezone        = var.business_hours.timezone
+        business_start  = var.business_hours.start
+        business_end    = var.business_hours.end
+      })
+    }
+    keyvault-secret-reads-non-pipeline = {
+      display_name = "FAFO tripwire: Key Vault secret read by a non-pipeline identity"
+      description  = "A secret was read or listed by an identity that is neither a pipeline identity nor an approved secret reader."
+      severity     = 2
+      query = templatefile("${local.kql_dir}/keyvault-secret-reads-non-pipeline.kql", {
+        new_rows_filter     = local.tripwire_new_rows
+        approved_reader_ids = local.pipeline_ids_kql
+      })
+    }
+  }
 }
 
-# Tripwire 1 - out-of-band change. Any successful write or delete by a caller who is not
-# an approved operator or the remediation identity. (CSF DE.CM-03; 800-53 CM-3, AU-6)
-resource "azurerm_monitor_scheduled_query_rules_alert_v2" "unexpected_writer" {
-  name                 = "tripwire-unexpected-writer"
+# (CSF DE.CM-03; 800-53 AU-6, SI-4 - and per rule, the controls named at the top of each .kql file)
+resource "azurerm_monitor_scheduled_query_rules_alert_v2" "tripwire" {
+  for_each = local.tripwires
+
+  name                 = "tripwire-${each.key}"
   resource_group_name  = local.workspace_rg
   location             = var.location
   scopes               = [local.workspace_id]
-  display_name         = "GRC tripwire: change by an unexpected principal"
-  description          = "Out-of-band change detector. Expected callers come from approved_change_callers plus the remediation identity."
-  severity             = 2
+  display_name         = each.value.display_name
+  description          = each.value.description
+  severity             = each.value.severity
   evaluation_frequency = "PT15M"
   window_duration      = local.tripwire_window
 
   criteria {
-    query                   = <<-KQL
-      AzureActivity
-      | where ${local.tripwire_new_rows}
-      | where CategoryValue == "Administrative"
-      | where ActivityStatusValue =~ "Success"
-      | where OperationNameValue endswith "/WRITE" or OperationNameValue endswith "/DELETE"
-      | where Caller !in~ (${local.expected_callers_kql})
-      | project TimeGenerated, Caller, OperationNameValue, _ResourceId, CorrelationId
-    KQL
+    query                   = each.value.query
     time_aggregation_method = "Count"
     threshold               = 0
     operator                = "GreaterThan"
@@ -141,45 +194,19 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "unexpected_writer" {
   tags = local.tags
 }
 
-# Tripwire 2 - the remediation identity out of its lane. Compensating control for the
-# residual risk documented in stage 06: storageAccounts/write cannot be limited to one
-# property, so anything outside the identity's two known jobs is alert-worthy. (800-53 AC-6(9); CSF PR.AA-05)
-resource "azurerm_monitor_scheduled_query_rules_alert_v2" "remediator_out_of_lane" {
-  name                 = "tripwire-remediator-out-of-lane"
-  resource_group_name  = local.workspace_rg
-  location             = var.location
-  scopes               = [local.workspace_id]
-  display_name         = "GRC tripwire: remediation identity acted outside its lane"
-  description          = "Fires when the remediation identity performs any operation outside its lane (storage property writes, DINE diagnostic deployments)."
-  severity             = 1
-  evaluation_frequency = "PT15M"
-  window_duration      = local.tripwire_window
+# The two rules that existed before the for_each keep their Azure resources.
+moved {
+  from = azurerm_monitor_scheduled_query_rules_alert_v2.unexpected_writer
+  to   = azurerm_monitor_scheduled_query_rules_alert_v2.tripwire["unexpected-writer"]
+}
 
-  criteria {
-    query                   = <<-KQL
-      AzureActivity
-      | where ${local.tripwire_new_rows}
-      | where Caller =~ "${local.remediation_pid}"
-      | where OperationNameValue !in~ (${local.remediator_lane_kql})
-      | project TimeGenerated, OperationNameValue, ActivityStatusValue, _ResourceId, CorrelationId
-    KQL
-    time_aggregation_method = "Count"
-    threshold               = 0
-    operator                = "GreaterThan"
-  }
-
-  action {
-    action_groups = [azurerm_monitor_action_group.grc.id]
-  }
-
-  tags = local.tags
+moved {
+  from = azurerm_monitor_scheduled_query_rules_alert_v2.remediator_out_of_lane
+  to   = azurerm_monitor_scheduled_query_rules_alert_v2.tripwire["remediator-out-of-lane"]
 }
 
 output "tripwire_rules" {
-  value = [
-    azurerm_monitor_scheduled_query_rules_alert_v2.unexpected_writer.name,
-    azurerm_monitor_scheduled_query_rules_alert_v2.remediator_out_of_lane.name,
-  ]
+  value = sort([for r in azurerm_monitor_scheduled_query_rules_alert_v2.tripwire : r.name])
 }
 
 output "expected_callers_count" {

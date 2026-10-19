@@ -1,0 +1,14 @@
+// Course-derived (the taught "who is touching reality" tripwire), kept as the baseline detector.
+// FAFO's own queries are the other three files in this folder.
+// Any successful control-plane write or delete by a caller who is neither an approved operator
+// nor the remediation identity: the out-of-band change a nightly plan cannot see.
+// 800-53: CM-3 configuration change control, AU-6 audit review, SI-4 system monitoring.
+//
+// Placeholders: ${new_rows_filter}, ${expected_callers} (quoted, comma-separated Caller values).
+AzureActivity
+${new_rows_filter}
+| where CategoryValue == "Administrative"
+| where ActivityStatusValue =~ "Success"
+| where OperationNameValue endswith "/WRITE" or OperationNameValue endswith "/DELETE"
+| where Caller !in~ (${expected_callers})
+| project TimeGenerated, Caller, OperationNameValue, _ResourceId, SubscriptionId, CorrelationId

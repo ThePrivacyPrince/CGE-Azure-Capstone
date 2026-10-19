@@ -39,3 +39,28 @@ variable "activity_log_setting_name" {
   type        = string
   default     = "ds-activity-to-law"
 }
+
+variable "environment" {
+  type    = string
+  default = "dev"
+}
+
+variable "business_hours" {
+  description = "FAFO's change window for the off-hours tripwire: local hours [start, end), Monday to Friday."
+  type = object({
+    timezone = string
+    start    = number
+    end      = number
+  })
+  default = { timezone = "America/New_York", start = 8, end = 18 }
+  validation {
+    condition     = var.business_hours.start >= 0 && var.business_hours.end <= 24 && var.business_hours.start < var.business_hours.end
+    error_message = "business_hours needs 0 <= start < end <= 24."
+  }
+}
+
+variable "approved_secret_reader_ids" {
+  description = "Object IDs (besides the pipeline's own identities) approved to read Key Vault secrets, e.g. FAFO's analytics app identity. Everyone else trips tripwire-keyvault-secret-reads-non-pipeline."
+  type        = list(string)
+  default     = []
+}

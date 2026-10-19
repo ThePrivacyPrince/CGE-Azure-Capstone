@@ -39,3 +39,26 @@ data "terraform_remote_state" "foundation" {
     use_azuread_auth     = true
   }
 }
+
+# The pipeline identities the Key Vault tripwire must not flag.
+data "terraform_remote_state" "evidence" {
+  backend = "azurerm"
+  config = {
+    resource_group_name  = var.state_resource_group
+    storage_account_name = var.state_storage_account
+    container_name       = "tfstate"
+    key                  = "03-evidence-store.tfstate"
+    use_azuread_auth     = true
+  }
+}
+
+data "terraform_remote_state" "reporting" {
+  backend = "azurerm"
+  config = {
+    resource_group_name  = var.state_resource_group
+    storage_account_name = var.state_storage_account
+    container_name       = "tfstate"
+    key                  = "04-reporting.tfstate"
+    use_azuread_auth     = true
+  }
+}

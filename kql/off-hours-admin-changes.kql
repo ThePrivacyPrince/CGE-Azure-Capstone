@@ -1,0 +1,23 @@
+// FAFO question: are people changing the environment outside the change window?
+// FAFO's four platform engineers work 08:00-18:00 US Eastern, Monday to Friday. A human
+// writing to production at 02:00 on a Sunday is either an incident (which should have a
+// ticket) or a compromised account. Workloads are excluded: Azure logs a human's Caller as a
+// UPN (contains "@") and a managed identity or service principal as an object ID.
+// 800-53: AC-2 account management (atypical use), AU-6 audit review, CM-3 change control.
+//
+// Placeholders (filled by stages/07-detection with templatefile; replace by hand to run ad hoc):
+//   ${new_rows_filter}   alert rules: "| where ingestion_time() > ago(15m)"; ad hoc: delete the line
+//   ${timezone}          IANA zone of the change window, e.g. "America/New_York"
+//   ${business_start}    first business hour, e.g. 8
+//   ${business_end}      first hour after business, e.g. 18
+AzureActivity
+${new_rows_filter}
+| where CategoryValue == "Administrative"
+| where ActivityStatusValue =~ "Success"
+| where OperationNameValue endswith "/WRITE" or OperationNameValue endswith "/DELETE" or OperationNameValue endswith "/ACTION"
+| where Caller has "@"
+| extend LocalTime = datetime_utc_to_local(TimeGenerated, "${timezone}")
+| extend LocalHour = hourofday(LocalTime), LocalDay = toint(dayofweek(LocalTime) / 1d)
+| where LocalDay in (0, 6) or LocalHour < ${business_start} or LocalHour >= ${business_end}
+| project TimeGenerated, LocalTime, Caller, OperationNameValue, _ResourceId, SubscriptionId, CorrelationId
+| order by TimeGenerated desc
