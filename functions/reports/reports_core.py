@@ -1,4 +1,4 @@
-"""Report generation core for the Tallyfin GRC pipeline (CGE-AZ stage 04).
+"""Report generation core for the FAFO GRC pipeline (CGE-AZ stage 04).
 
 Reports read from the evidence store ONLY. This module never imports an Azure
 management SDK, and the reporter identity holds no Azure Resource Manager role
@@ -34,10 +34,31 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Protocol
 
-LOG = logging.getLogger("tallyfin.reports")
+LOG = logging.getLogger("fafo.reports")
 
 GENERATOR_VERSION = "2.0"
-CROSSWALK_FRAMEWORK_ID = "tallyfin-crosswalk"
+CROSSWALK_FRAMEWORK_ID = "fafo-crosswalk"
+
+# Federal track: NIST SP 800-53 Rev. 5 is the one control catalog. Every crosswalk ID resolves
+# to it (tests/test_catalog.py), and the scorecard groups results by its control families.
+CATALOG = "nist_800_53_r5"
+FAMILIES = {
+    "AC": "Access Control", "AT": "Awareness and Training", "AU": "Audit and Accountability",
+    "CA": "Assessment, Authorization, and Monitoring", "CM": "Configuration Management",
+    "CP": "Contingency Planning", "IA": "Identification and Authentication", "IR": "Incident Response",
+    "MA": "Maintenance", "MP": "Media Protection", "PE": "Physical and Environmental Protection",
+    "PL": "Planning", "PM": "Program Management", "PS": "Personnel Security",
+    "PT": "PII Processing and Transparency", "RA": "Risk Assessment", "SA": "System and Services Acquisition",
+    "SC": "System and Communications Protection", "SI": "System and Information Integrity",
+    "SR": "Supply Chain Risk Management",
+}
+
+
+def control_sort_key(control_id: str) -> tuple[str, int, int]:
+    """AC-2 < AC-2(7) < AC-10 (numeric, not lexical)."""
+    family, _, rest = control_id.partition("-")
+    base, _, enh = rest.partition("(")
+    return family, int(base or 0), int(enh.rstrip(")") or 0)
 OPEN_RESULTS = {"fail"}
 
 Q_LATEST_COMPLETED = (
@@ -369,7 +390,7 @@ def render_poam_xlsx(poam: dict[str, Any], lineage: dict[str, Any]) -> bytes:
     ws.title = "POA&M"
     headers = [
         "POA&M ID", "Weakness", "Severity", "Resource", "Resource Group", "Source",
-        "Control Key", "NIST CSF 2.0", "PCI DSS 4.0.1", "GLBA", "First Seen",
+        "Control Key", "NIST SP 800-53 Rev. 5", "First Seen",
         "Scheduled Completion", "Overdue", "Status", "Snapshot ID",
     ]
     ws.append(headers)
@@ -378,8 +399,7 @@ def render_poam_xlsx(poam: dict[str, Any], lineage: dict[str, Any]) -> bytes:
         ws.append(
             [
                 i["poamId"], i["weakness"], i["severity"], i["resourceId"], i["resourceGroup"], i["source"],
-                i["controlKey"], ", ".join(fw.get("nist_csf_2", [])), ", ".join(fw.get("pci_dss_4_0_1", [])),
-                ", ".join(fw.get("glba_safeguards", [])), i["firstSeen"], i["scheduledCompletion"],
+                i["controlKey"], ", ".join(fw.get(CATALOG, [])), i["firstSeen"], i["scheduledCompletion"],
                 "YES" if i["overdue"] else "", i["status"], i["evidence"]["snapshotId"],
             ]
         )
@@ -424,14 +444,24 @@ def build_scorecard(
     frameworks = {}
     for fw, meta in crosswalk.frameworks.items():
         rows = []
-        for r in sorted(req.get(fw, {})):
+        for r in sorted(req.get(fw, {}), key=control_sort_key):
             c = req[fw][r]
-            rows.append({"requirement": r, "pass": c["pass"], "fail": c["fail"], "notApplicable": c["not_applicable"]})
+            rows.append({
+                "requirement": r,
+                "family": FAMILIES.get(r.split("-")[0], r.split("-")[0]),
+                "pass": c["pass"], "fail": c["fail"], "notApplicable": c["not_applicable"],
+            })
         failing = sum(1 for row in rows if row["fail"])
+        families: dict[str, Counter] = defaultdict(Counter)
+        for row in rows:
+            families[row["family"]]["controls"] += 1
+            families[row["family"]]["failing"] += 1 if row["fail"] else 0
         frameworks[fw] = {
             "name": meta.get("name", fw),
+            "baseline": meta.get("baseline"),
             "requirementsWithEvidence": len(rows),
             "requirementsFailing": failing,
+            "families": {k: dict(v) for k, v in sorted(families.items())},
             "requirements": rows,
         }
 
@@ -457,7 +487,7 @@ def build_scorecard(
 def render_sar_markdown(scorecard: dict[str, Any], poam: dict[str, Any], lineage: dict[str, Any]) -> str:
     s = poam["summary"]
     lines = [
-        "# Tallyfin Security Assessment Report (SAR)",
+        "# FAFO Inc. Security Assessment Report (SAR) - NIST SP 800-53 Rev. 5",
         "",
         f"- **Report execution:** `{lineage['reportExecutionId']}` at {lineage['generatedAt']}",
         f"- **Evidence run:** `{lineage['runId']}` (completed {lineage['runCompletedAt']}, digest verified: {lineage['digestVerified']})",
@@ -473,15 +503,19 @@ def render_sar_markdown(scorecard: dict[str, Any], poam: dict[str, Any], lineage
     ]
     for src, c in sorted(scorecard["bySource"].items()):
         lines.append(f"| {src} | {c.get('pass', 0)} | {c.get('fail', 0)} | {c.get('not_applicable', 0)} | {c.get('unknown', 0)} |")
-    lines += ["", "## Framework scorecard (collect once, map many)", ""]
+    lines += ["", "## Control scorecard (collect once, map to the catalog)", ""]
     for fw in scorecard["frameworks"].values():
         lines.append(
-            f"### {fw['name']} - {fw['requirementsWithEvidence']} requirements with evidence, {fw['requirementsFailing']} failing"
+            f"### {fw['name']} ({fw.get('baseline') or 'no baseline'}) - "
+            f"{fw['requirementsWithEvidence']} controls with evidence, {fw['requirementsFailing']} failing"
         )
         lines.append("")
         if fw["requirements"]:
-            lines += ["| Requirement | pass | fail | n/a |", "|---|---|---|---|"]
-            lines += [f"| {r['requirement']} | {r['pass']} | {r['fail']} | {r['notApplicable']} |" for r in fw["requirements"]]
+            lines += ["| Control | Family | pass | fail | n/a |", "|---|---|---|---|---|"]
+            lines += [
+                f"| {r['requirement']} | {r['family']} | {r['pass']} | {r['fail']} | {r['notApplicable']} |"
+                for r in fw["requirements"]
+            ]
         else:
             lines.append("_No stored evidence maps to this framework in this run._")
         lines.append("")

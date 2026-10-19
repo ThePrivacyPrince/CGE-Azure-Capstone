@@ -36,12 +36,16 @@ locals {
 
   # The escalation ladder, wired to one variable. Each step up is a reviewed PR
   # (stages/06-enforcement is CODEOWNERS-protected; see docs/BLAST-RADIUS.md):
-  #   audit   -> observe only; count what would change
-  #   dry-run -> modify effect deployed, but enforcement_mode DoNotEnforce;
+  #   audit   -> corrective controls Disabled; the paired DETECTIVE controls in stage 01
+  #              (cge-deny-public-blob, fafo-storage-min-tls12) keep reporting the gap
+  #   dry-run -> Modify effect deployed, but enforcement_mode DoNotEnforce;
   #              remediation happens only through a task a human approved (below)
-  #   enforce -> modify effect enforced on new/updated requests; existing resources
+  #   enforce -> Modify enforced on new/updated requests; existing resources
   #              STILL need a remediation task (Lab 6 finding)
-  effect           = var.remediation_mode == "audit" ? "Audit" : "Modify"
+  # The effect is an assignment PARAMETER (allowedValues Modify / Disabled), never a literal in
+  # the rule. Audit is deliberately not offered: a Modify rule's details block is not valid
+  # under Audit, so "observe only" belongs to the detective twin, not the corrective control.
+  effect           = var.remediation_mode == "audit" ? "Disabled" : "Modify"
   enforcement_mode = var.remediation_mode == "enforce" ? "Default" : "DoNotEnforce"
 
   # Required field on Modify policies. It names the roles a PORTAL-created identity would
@@ -50,7 +54,7 @@ locals {
   storage_account_contributor = "/providers/Microsoft.Authorization/roleDefinitions/17d1049b-9a84-46fb-8f53-869881c3d3ab"
 
   # One entry per corrective control. fix-public-blob is the starter's; fix-min-tls is
-  # Tallyfin's own (pairs with the tf-storage-min-tls12 detective control in stage 01).
+  # FAFO's own (pairs with the fafo-storage-min-tls12 detective control in stage 01).
   corrective_controls = {
     fix-public-blob = {
       definition_name = "cge-fix-public-blob"
@@ -60,8 +64,8 @@ locals {
       value           = false
     }
     fix-min-tls = {
-      definition_name = "tf-fix-min-tls"
-      display_name    = "Tallyfin remediate: set storage minimum TLS to 1.2"
+      definition_name = "fafo-fix-min-tls"
+      display_name    = "FAFO remediate: set storage minimum TLS to 1.2"
       condition       = { field = "Microsoft.Storage/storageAccounts/minimumTlsVersion", notEquals = "TLS1_2" }
       field           = "Microsoft.Storage/storageAccounts/minimumTlsVersion"
       value           = "TLS1_2"
@@ -99,6 +103,14 @@ resource "azurerm_policy_definition" "fix" {
   mode                = "Indexed"
   management_group_id = local.mg_id
 
+  parameters = jsonencode({
+    effect = {
+      type          = "String"
+      allowedValues = ["Modify", "Disabled"]
+      defaultValue  = "Disabled"
+    }
+  })
+
   policy_rule = jsonencode({
     "if" = {
       allOf = [
@@ -107,8 +119,8 @@ resource "azurerm_policy_definition" "fix" {
       ]
     }
     then = {
-      effect = local.effect
-      details = local.effect == "Audit" ? null : {
+      effect = "[parameters('effect')]"
+      details = {
         roleDefinitionIds = [local.storage_account_contributor]
         conflictEffect    = "audit"
         operations = [
@@ -130,6 +142,11 @@ resource "azurerm_management_group_policy_assignment" "fix" {
   management_group_id  = local.mg_id
   location             = var.location
   enforce              = local.enforcement_mode == "Default"
+
+  # The escalation ladder reaches the rule only through this parameter.
+  parameters = jsonencode({
+    effect = { value = local.effect }
+  })
 
   # Remediation runs AS the single named identity. Activity Log `caller` will show its
   # principal ID - that is how Lab 6 attributed the fix.
@@ -156,7 +173,7 @@ resource "azurerm_management_group_policy_assignment" "fix" {
 # operation by this identity, and every write it makes is attributable in the Activity Log.
 # rollback: remove the assignment; remediation tasks then fail closed (AuthorizationFailed).
 resource "azurerm_role_definition" "remediator" {
-  name        = "tf-storage-baseline-remediator"
+  name        = "fafo-storage-baseline-remediator"
   scope       = local.mg_id
   description = "Policy Modify remediation for storage baseline properties. No keys, no delete, no data access."
 

@@ -31,7 +31,7 @@ resource "azurerm_cosmosdb_account" "evidence" {
   # (removed in azurerm v5.0); the boolean inverts, so disabled=true becomes enabled=false.
   local_authentication_enabled = false
 
-  # Tallyfin: block key-based writes to databases/containers/throughput (privilege
+  # FAFO: block key-based writes to databases/containers/throughput (privilege
   # escalation path from a leaked key). In-place change.
   access_key_metadata_writes_enabled = false
 
@@ -85,7 +85,7 @@ resource "azurerm_cosmosdb_sql_container" "mappings" {
   partition_key_paths = ["/frameworkId"]
 }
 
-# --- Tallyfin capstone: history + run manifests -----------------------------------------
+# --- FAFO: history + run manifests -----------------------------------------
 #
 # Lab 6 finding: the assessments doc id was sha256(assessment|resource), so every run
 # overwrote the last and Cosmos held "now", not history. A POA&M could not say when a
@@ -136,7 +136,7 @@ resource "azurerm_storage_account" "evidence" {
   shared_access_key_enabled       = false
   allow_nested_items_to_be_public = false
 
-  # Tallyfin hardening (all in-place changes; nothing here forces replacement).
+  # FAFO hardening (all in-place changes; nothing here forces replacement).
   default_to_oauth_authentication  = true
   cross_tenant_replication_enabled = false
   local_user_enabled               = false

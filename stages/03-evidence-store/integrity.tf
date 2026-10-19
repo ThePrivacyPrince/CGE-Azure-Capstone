@@ -1,4 +1,4 @@
-# --- Tallyfin capstone: protect the evidence plane itself ---------------------------------
+# --- FAFO: protect the evidence plane itself ---------------------------------
 #
 # The evidence store is the one place an auditor must be able to trust, so it gets the
 # same three things the pipeline demands of everything else: deletion is deliberate,

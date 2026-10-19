@@ -1,0 +1,31 @@
+{
+  "profile": {
+    "uuid": "a1c03e78-7b13-5f28-b735-5aceee4b5910",
+    "metadata": {
+      "title": "FAFO Inc. tailored baseline: NIST SP 800-53 Rev. 5 Moderate + data residency",
+      "last-modified": "2026-10-19T00:00:00+00:00",
+      "version": "1.0.0",
+      "oscal-version": "1.1.2",
+      "remarks": "Imports the NIST SP 800-53B Moderate baseline unchanged and adds SA-9(5) (Processing, Storage, and Service Location), which FAFO's data-residency control (fafo-allowed-locations) implements. The SSP (oscal/ssp.json) imports this profile; tests/test_catalog.py proves every crosswalk control is inside it."
+    },
+    "imports": [
+      {
+        "href": "https://raw.githubusercontent.com/usnistgov/oscal-content/main/nist.gov/SP800-53/rev5/json/NIST_SP-800-53_rev5_MODERATE-baseline_profile.json",
+        "include-all": {}
+      },
+      {
+        "href": "https://raw.githubusercontent.com/usnistgov/oscal-content/main/nist.gov/SP800-53/rev5/json/NIST_SP-800-53_rev5_catalog.json",
+        "include-controls": [
+          {
+            "with-ids": [
+              "sa-9.5"
+            ]
+          }
+        ]
+      }
+    ],
+    "merge": {
+      "as-is": true
+    }
+  }
+}

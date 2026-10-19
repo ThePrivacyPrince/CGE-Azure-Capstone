@@ -70,7 +70,7 @@ resource "azurerm_monitor_diagnostic_setting" "activity_log" {
 }
 
 resource "azurerm_monitor_action_group" "grc" {
-  name                = "ag-tallyfin-grc"
+  name                = "ag-fafo-grc"
   resource_group_name = local.workspace_rg
   short_name          = "grc-trip"
 

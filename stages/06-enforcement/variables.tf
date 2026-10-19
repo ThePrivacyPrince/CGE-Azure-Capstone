@@ -22,7 +22,7 @@ variable "state_storage_account" {
   type = string
 }
 
-# --- Tallyfin capstone: the human approval gate ------------------------------------
+# --- FAFO: the human approval gate ------------------------------------
 
 variable "approved_remediations" {
   description = "Corrective controls a reviewer has approved for a remediation task in THIS change. Remove the key after the task succeeds so the file always shows what is pending."

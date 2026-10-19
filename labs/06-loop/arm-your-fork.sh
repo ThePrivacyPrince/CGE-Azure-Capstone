@@ -45,7 +45,7 @@ done
 # at mg-grc (could change anything) and Storage Blob Data Contributor on state (could
 # rewrite it). A PR that edited the workflow could have used both. The identity below can
 # READ everything terraform plan needs and change nothing:
-#   * custom role tf-grc-ci-planner at mg-grc: */read plus the list actions azurerm's
+#   * custom role fafo-grc-ci-planner at mg-grc: */read plus the list actions azurerm's
 #     refresh calls. Residual risk (RISK-0005), stated plainly - three of those actions
 #     return secrets:
 #       - storageAccounts/listKeys: the Y1 runtime storage key (which also sits in state);
@@ -53,14 +53,14 @@ done
 #         the AzureWebJobsStorage connection string;
 #       - DocumentDB listKeys/listConnectionStrings: the evidence Cosmos account's keys.
 #         These are inert while key auth is disabled (local_authentication_enabled =
-#         false, held by gate rule TF-STG-005 and policy tf-cosmos-no-local-auth).
+#         false, held by gate rule TF-STG-005 and policy fafo-cosmos-no-local-auth).
 #     Flex Consumption removes the storage key entirely (docs/DECISIONS.md ADR-007).
 #     If a plan fails with AuthorizationFailed, the error names the one missing action:
 #     add exactly that action, nothing broader.
 #   * Storage Blob Data READER on the state container: plans run with -lock=false.
 # Applies stay human-run from your terminal (docs/DECISIONS.md ADR-006).
 MG_SCOPE="/providers/Microsoft.Management/managementGroups/mg-grc"
-ROLE_NAME="tf-grc-ci-planner"
+ROLE_NAME="fafo-grc-ci-planner"
 echo ">> Custom role ${ROLE_NAME} at mg-grc (read + refresh list actions; no writes)"
 if ! az role definition list --name "$ROLE_NAME" --scope "$MG_SCOPE" --query "[0].name" -o tsv | grep -q .; then
   az role definition create --role-definition "{

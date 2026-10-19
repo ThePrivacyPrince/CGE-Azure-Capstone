@@ -21,7 +21,7 @@ def collect(store, crosswalk, public_access_status, now, tls_state="NonCompliant
             defender_item(PUBLIC_BLOB_ASSESSMENT_NAME, "Storage account public access should be disallowed", public_access_status),
             defender_item("bbbb", "Some brand new Defender check", "Unhealthy", severity="Low"),
         ]})],
-        ("POST", POL_PATH): [FakeResponse(200, {"value": [policy_item("tf-storage-min-tls12", tls_state)]})],
+        ("POST", POL_PATH): [FakeResponse(200, {"value": [policy_item("fafo-storage-min-tls12", tls_state)]})],
     }
     client = ec.ArmClient(FakeCredential(), FakeSession(routes), sleep=lambda s: None, audit=lambda e: None)
     m = ec.run_collection(client, store, SUB, crosswalk, now=now)
@@ -43,7 +43,7 @@ def test_poam_reads_latest_completed_run_with_stable_first_seen(crosswalk):
     item = next(i for i in body["items"] if i["controlKey"] == "defender:storage-public-access")
     assert item["firstSeen"].startswith("2026-10-10")  # from history, not "today"
     assert item["scheduledCompletion"] == "2026-11-09"  # High = 30 days from first seen
-    assert "PR.DS-01" in item["frameworks"]["nist_csf_2"]
+    assert "AC-3" in item["frameworks"]["nist_800_53_r5"]
     assert body["summary"]["unmapped"] == 1  # the brand-new Defender check is flagged, not dropped
 
 
@@ -103,7 +103,7 @@ def test_sar_delta_counts_only_explicit_fixes(crosswalk):
     assert len(card["deltaFromPreviousRun"]["fixed"]) == 2  # public access + TLS: fail -> pass
     assert card["deltaFromPreviousRun"]["noLongerObserved"] == []
     md = writer.blobs[out["files"]["sar.md"]["path"]].decode()
-    assert "Reproduce these numbers" in md and "NIST Cybersecurity Framework 2.0" in md
+    assert "Reproduce these numbers" in md and "NIST SP 800-53 Rev. 5" in md
 
 
 def test_disappeared_finding_is_not_counted_as_fixed(crosswalk):
@@ -120,7 +120,7 @@ def test_crosswalk_rejects_unknown_match_keys_and_frameworks(crosswalk):
     with pytest.raises(rc.CrosswalkError):
         rc.Crosswalk(bad, "v")
     bad = json.loads(json.dumps(crosswalk))
-    bad["controls"][0]["mappings"]["iso_27001"] = ["A.5.1"]
+    bad["controls"][0]["mappings"]["iso_27001"] = ["A.5.1"]  # one catalog per track
     with pytest.raises(rc.CrosswalkError):
         rc.Crosswalk(bad, "v")
 
@@ -130,10 +130,13 @@ def test_every_policy_in_terraform_is_in_the_crosswalk(crosswalk):
     import re
     from conftest import ROOT
 
-    names = set()
+    names, roles = set(), set()
     for tf in (ROOT / "stages").rglob("*.tf"):
-        names |= set(re.findall(r'name\s*=\s*"((?:cge|tf)-[a-z0-9-]+)"', tf.read_text()))
-    tf_policies = {n for n in names if n.startswith(("cge-deny", "cge-dine", "cge-require", "cge-fix", "tf-storage-min", "tf-cosmos", "tf-allowed", "tf-fix"))}
+        text = tf.read_text()
+        names |= set(re.findall(r'name\s*=\s*"((?:cge|fafo)-[a-z0-9-]+)"', text))
+        roles |= set(re.findall(r'resource "azurerm_role_definition" "\w+" \{\s*name\s*=\s*"([^"]+)"', text))
+    tf_policies = {n for n in names - roles if n.startswith(("cge-deny", "cge-dine", "cge-require", "cge-fix", "fafo-"))}
+    assert len(tf_policies) >= 11, tf_policies  # the regex still finds every policy
     mapped = {c["match"].get("policyDefinitionName") for c in crosswalk["controls"]}
     assert tf_policies <= mapped, tf_policies - mapped
 

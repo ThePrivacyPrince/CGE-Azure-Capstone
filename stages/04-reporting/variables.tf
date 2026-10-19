@@ -18,7 +18,7 @@ variable "state_storage_account" {
   type = string
 }
 
-# --- Tallyfin capstone additions -------------------------------------------------
+# --- FAFO additions -------------------------------------------------
 
 variable "poam_schedule" {
   description = "Daily POA&M (UTC). Runs 40 minutes after the 06:00 collection so it reads a completed run."

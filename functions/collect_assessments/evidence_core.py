@@ -1,4 +1,4 @@
-"""Evidence collection core for the Tallyfin GRC pipeline (CGE-AZ stage 03).
+"""Evidence collection core for the FAFO GRC pipeline (CGE-AZ stage 03).
 
 Collect once, store once, stamp everything.
 
@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterator, Mapping, Protocol
 
-LOG = logging.getLogger("tallyfin.collector")
+LOG = logging.getLogger("fafo.collector")
 
 ARM_ENDPOINT = "https://management.azure.com"
 ARM_SCOPE = "https://management.azure.com/.default"
@@ -391,7 +391,7 @@ def latest_state_document(snapshot: dict[str, Any]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- crosswalk
 
 
-CROSSWALK_FRAMEWORK_ID = "tallyfin-crosswalk"
+CROSSWALK_FRAMEWORK_ID = "fafo-crosswalk"
 
 
 def crosswalk_document(mapping: dict[str, Any]) -> dict[str, Any]:

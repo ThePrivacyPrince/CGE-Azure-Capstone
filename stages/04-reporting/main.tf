@@ -38,7 +38,7 @@ resource "azurerm_storage_account" "func_internal" {
   allow_nested_items_to_be_public = false
   https_traffic_only_enabled      = true
 
-  # Tallyfin: the key this account must keep is the only shared key in the pipeline,
+  # FAFO: the key this account must keep is the only shared key in the pipeline,
   # so bound what a leaked SAS could do and keep deleted host data recoverable.
   sas_policy {
     expiration_period = "01.00:00:00"
@@ -72,7 +72,7 @@ resource "azurerm_linux_function_app" "reporting" {
   service_plan_id            = azurerm_service_plan.reporting.id
   storage_account_name       = azurerm_storage_account.func_internal.name
   storage_account_access_key = azurerm_storage_account.func_internal.primary_access_key
-  https_only                 = true # Tallyfin: no plaintext path to the app
+  https_only                 = true # FAFO: no plaintext path to the app
 
   #checkov:skip=CKV_AZURE_221:Y1 Consumption cannot use private endpoints; timer-only by default (no HTTP triggers registered), ADR-005.
 
@@ -94,7 +94,7 @@ resource "azurerm_linux_function_app" "reporting" {
     "SCM_DO_BUILD_DURING_DEPLOYMENT" = "true"
     "ENABLE_ORYX_BUILD"              = "true"
 
-    # Tallyfin capstone settings
+    # FAFO settings
     "POAM_SCHEDULE"          = var.poam_schedule
     "SAR_SCHEDULE"           = var.sar_schedule
     "MAX_RUN_AGE_HOURS"      = tostring(var.max_run_age_hours)
@@ -123,12 +123,12 @@ resource "azurerm_cosmosdb_sql_role_assignment" "reporter_cosmos_read" {
   scope               = local.cosmos_id
 }
 
-# Tallyfin capstone: the reporter's job is "create new report files". The starter's
+# FAFO: the reporter's job is "create new report files". The starter's
 # Storage Blob Data Contributor (account-wide) also grants delete and container management;
 # WORM blocks the delete today, but least privilege should not lean on a second control.
 # This custom role creates and reads blobs in the reports container only.
 resource "azurerm_role_definition" "report_writer" {
-  name        = "tf-grc-report-writer"
+  name        = "fafo-grc-report-writer"
   scope       = data.azurerm_storage_account.evidence.id
   description = "Create and read report blobs. No delete, no overwrite-by-policy bypass, no container management."
 

@@ -35,10 +35,10 @@ variable "public_blob_policy_effect" {
   }
 }
 
-# --- Tallyfin capstone additions -------------------------------------------------
+# --- FAFO controls ------------------------------------------------------------------
 
 variable "allowed_locations" {
-  description = "Regions Tallyfin data may live in. US-only keeps the GLBA data map simple. Includes every region the starter stages already use (eastus for foundation, eastus2 for the evidence store, centralus for the Function tier) so nothing deployed today is out of policy."
+  description = "Regions FAFO data may live in. US-only answers the federal pilot's and hospital customers' residency question with one word. Includes every region the starter stages already use (eastus for foundation, eastus2 for the evidence store, centralus for the Function tier) so nothing deployed today is out of policy."
   type        = list(string)
   default     = ["eastus", "eastus2", "centralus"]
 }
@@ -70,5 +70,35 @@ variable "cosmos_local_auth_policy_effect" {
   validation {
     condition     = contains(["Audit", "Deny", "Disabled"], var.cosmos_local_auth_policy_effect)
     error_message = "cosmos_local_auth_policy_effect must be Audit, Deny, or Disabled."
+  }
+}
+
+variable "keyvault_purge_policy_effect" {
+  description = "Effect for fafo-keyvault-purge-protection. Audit first: the seeded estate has vaults without it, and enabling purge protection is one-way."
+  type        = string
+  default     = "Audit"
+  validation {
+    condition     = contains(["Audit", "Deny", "Disabled"], var.keyvault_purge_policy_effect)
+    error_message = "keyvault_purge_policy_effect must be Audit, Deny, or Disabled."
+  }
+}
+
+variable "subscription_owner_policy_effect" {
+  description = "Effect for fafo-audit-subscription-owner. Audit: a standing Owner is a POA&M finding, not a blocked deployment, until a just-in-time path exists."
+  type        = string
+  default     = "Audit"
+  validation {
+    condition     = contains(["Audit", "Deny", "Disabled"], var.subscription_owner_policy_effect)
+    error_message = "subscription_owner_policy_effect must be Audit, Deny, or Disabled."
+  }
+}
+
+variable "keyvault_audit_logs_policy_effect" {
+  description = "Effect for fafo-dine-keyvault-audit-logs. DeployIfNotExists: the secret-read tripwire has no data without it."
+  type        = string
+  default     = "DeployIfNotExists"
+  validation {
+    condition     = contains(["DeployIfNotExists", "AuditIfNotExists", "Disabled"], var.keyvault_audit_logs_policy_effect)
+    error_message = "keyvault_audit_logs_policy_effect must be DeployIfNotExists, AuditIfNotExists, or Disabled."
   }
 }

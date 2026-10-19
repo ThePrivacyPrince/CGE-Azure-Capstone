@@ -1,7 +1,7 @@
 {
   "_comment": "Synthetic compliant counterpart of bad-plan.json. Expect: 0 failures.",
   "resource_changes": [
-    {"address": "azurerm_storage_account.tallyfin_exports", "type": "azurerm_storage_account", "name": "tallyfin_exports",
+    {"address": "azurerm_storage_account.fafo_phi_exports", "type": "azurerm_storage_account", "name": "fafo_phi_exports",
      "change": {"actions": ["create"], "after_unknown": {},
        "after": {"allow_nested_items_to_be_public": false, "shared_access_key_enabled": false, "min_tls_version": "TLS1_2", "https_traffic_only_enabled": true}}},
     {"address": "azurerm_role_assignment.ci_shortcut", "type": "azurerm_role_assignment", "name": "ci_shortcut",

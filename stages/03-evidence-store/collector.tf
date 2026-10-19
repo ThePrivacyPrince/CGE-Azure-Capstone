@@ -21,7 +21,7 @@ resource "azurerm_storage_account" "func_internal" {
   allow_nested_items_to_be_public = false
   https_traffic_only_enabled      = true
 
-  # Tallyfin: the key this account must keep is the only shared key in the pipeline,
+  # FAFO: the key this account must keep is the only shared key in the pipeline,
   # so bound what a leaked SAS could do and keep deleted host data recoverable.
   sas_policy {
     expiration_period = "01.00:00:00"
@@ -55,7 +55,7 @@ resource "azurerm_linux_function_app" "collectors" {
   service_plan_id            = azurerm_service_plan.collectors.id
   storage_account_name       = azurerm_storage_account.func_internal.name
   storage_account_access_key = azurerm_storage_account.func_internal.primary_access_key
-  https_only                 = true # Tallyfin: no plaintext path to the app
+  https_only                 = true # FAFO: no plaintext path to the app
 
   #checkov:skip=CKV_AZURE_221:Y1 Consumption cannot use private endpoints; timer-only by default (no HTTP triggers registered), ADR-005.
 
@@ -76,7 +76,7 @@ resource "azurerm_linux_function_app" "collectors" {
     "SCM_DO_BUILD_DURING_DEPLOYMENT" = "true"
     "ENABLE_ORYX_BUILD"              = "true"
 
-    # Tallyfin capstone settings
+    # FAFO settings
     "COLLECT_SCHEDULE" = var.collect_schedule
     "APP_VERSION"      = var.app_version
     # HTTP triggers need a function key - a stored credential. They are compiled out
@@ -113,13 +113,13 @@ resource "azurerm_cosmosdb_sql_role_assignment" "collector_cosmos_write" {
   scope               = azurerm_cosmosdb_account.evidence.id
 }
 
-# --- Tallyfin capstone: the second evidence source (Azure Policy compliance states) -------
+# --- FAFO: the second evidence source (Azure Policy compliance states) -------
 #
 # Security Reader covers Defender assessments. Policy states are queried through a POST
 # action that Security Reader does not grant, so the collector gets exactly that action
 # and nothing else - not the broad built-in Reader.
 resource "azurerm_role_definition" "policy_state_reader" {
-  name        = "tf-grc-policy-state-reader"
+  name        = "fafo-grc-policy-state-reader"
   scope       = "/subscriptions/${local.subscription}"
   description = "Query Azure Policy compliance states. Read-only."
 

@@ -31,7 +31,7 @@ output "remediation_identity_principal_id" {
   value       = azurerm_user_assigned_identity.remediation.principal_id
 }
 
-# --- Tallyfin capstone additions -------------------------------------------------
+# --- FAFO additions -------------------------------------------------
 
 output "management_group_name" {
   description = "Sandbox management group name (the scope enforcement and remediation tasks target)."

@@ -1,4 +1,4 @@
-# --- Tallyfin capstone: discovery before activation for the data-residency guardrail ---
+# --- FAFO: discovery before activation for the data-residency guardrail ---
 #
 # Tallyfin (a fictional Plaid-style bank-data API) stores consumer financial data,
 # so where resources live is a GLBA / state-privacy question, not a preference.

@@ -28,7 +28,7 @@ def happy_routes():
         ("POST", POL_PATH): [
             FakeResponse(200, {"value": [policy_item("cge-deny-public-blob", "NonCompliant")],
                                "@odata.nextLink": f"https://management.azure.com{POL_PATH}?$skiptoken=x"}),
-            FakeResponse(200, {"value": [policy_item("tf-storage-min-tls12", "Compliant")]}),
+            FakeResponse(200, {"value": [policy_item("fafo-storage-min-tls12", "Compliant")]}),
         ],
     }
 

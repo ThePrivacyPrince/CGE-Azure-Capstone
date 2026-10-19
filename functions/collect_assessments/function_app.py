@@ -1,4 +1,4 @@
-"""CGE-AZ pipeline - Stage 3 collector (Tallyfin capstone edition).
+"""CGE-AZ pipeline - Stage 3 collector (FAFO capstone edition).
 
 Timer fires every 6 hours -> managed identity -> Defender assessments AND Azure
 Policy compliance states -> Cosmos. All logic lives in ``evidence_core.py`` so

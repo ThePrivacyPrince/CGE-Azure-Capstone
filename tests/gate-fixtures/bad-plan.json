@@ -1,7 +1,7 @@
 {
   "_comment": "Synthetic plan-shaped fixture: one of each mistake the gate exists to stop. Use: conftest test tests/gate-fixtures/bad-plan.json -p policy",
   "resource_changes": [
-    {"address": "azurerm_storage_account.tallyfin_exports", "type": "azurerm_storage_account", "name": "tallyfin_exports",
+    {"address": "azurerm_storage_account.fafo_phi_exports", "type": "azurerm_storage_account", "name": "fafo_phi_exports",
      "change": {"actions": ["create"], "after_unknown": {},
        "after": {"allow_nested_items_to_be_public": true, "shared_access_key_enabled": true, "min_tls_version": "TLS1_0", "https_traffic_only_enabled": true}}},
     {"address": "azurerm_role_assignment.ci_shortcut", "type": "azurerm_role_assignment", "name": "ci_shortcut",

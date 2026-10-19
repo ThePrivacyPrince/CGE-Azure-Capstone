@@ -33,7 +33,7 @@ variable "functions_location" {
   default     = "centralus"
 }
 
-# --- Tallyfin capstone additions -------------------------------------------------
+# --- FAFO additions -------------------------------------------------
 
 variable "collect_schedule" {
   description = "NCRONTAB (UTC, 6 fields). Every 6 hours: four snapshots a day show posture moving over time, and a remediation shows up in evidence within hours instead of the next night."

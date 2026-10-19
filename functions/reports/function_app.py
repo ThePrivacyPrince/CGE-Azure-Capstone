@@ -1,4 +1,4 @@
-"""CGE-AZ pipeline - Stage 4 report generators (Tallyfin capstone edition).
+"""CGE-AZ pipeline - Stage 4 report generators (FAFO capstone edition).
 
 Reports read from Cosmos ONLY - never from live services. The reporter identity
 has no Azure Resource Manager role, so this is enforced by identity, not just by
